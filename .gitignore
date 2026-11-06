@@ -1,0 +1,12 @@
+# 키와 비공개 자료는 절대 올리지 않는다 (BR-08, 13장)
+.streamlit/secrets.toml
+실제자료_비공개/
+*.m4a
+*.mp3
+*.wav
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.DS_Store

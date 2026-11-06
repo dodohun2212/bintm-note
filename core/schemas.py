@@ -1,0 +1,165 @@
+# -*- coding: utf-8 -*-
+"""코드와 AI가 주고받는 데이터 형식 (개발기획안 6장). AI 응답은 모두 이 형식으로 검사한다."""
+from __future__ import annotations
+
+from typing import Literal, Optional
+
+from pydantic import BaseModel, Field, field_validator
+
+# 6.1 페이지별 텍스트 ---------------------------------------------------------
+
+
+class Page(BaseModel):
+    n: int
+    text: str
+
+
+class Material(BaseModel):
+    name: str
+    kind: Literal["pdf", "pptx"]
+    n_pages: int
+    chars: int
+    pages: list[Page]
+
+    def page_text(self, n: int) -> str:
+        for p in self.pages:
+            if p.n == n:
+                return p.text
+        return ""
+
+
+# 6.2 개념 목록 -----------------------------------------------------------------
+
+
+class Concept(BaseModel):
+    id: str
+    name: str
+    summary: str = ""
+    pages: list[int] = Field(default_factory=list)
+    in_objectives: bool = False
+    objective_quote: Optional[str] = None
+    has_example: bool = False
+    has_exercise: bool = False
+    exercise_numbers: list[int] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+
+
+class ConceptsResult(BaseModel):
+    objectives_page: Optional[int] = None
+    exercise_page: Optional[int] = None
+    meta_pages: list[int] = Field(default_factory=list)
+    concepts: list[Concept]
+
+
+# 6.3 강조 발화 -----------------------------------------------------------------
+
+UTTERANCE_TYPES = ("emphasis", "exam_hint", "mistake_warning", "exercise_hint", "deferral", "skip", "question")
+
+
+class Utterance(BaseModel):
+    concept_id: Optional[str] = None
+    concept_name: str = ""
+    quote: str
+    type: str
+    strength: int = 2
+
+    @field_validator("strength", mode="before")
+    @classmethod
+    def _clamp_strength(cls, v):
+        try:
+            v = int(round(float(v)))
+        except (TypeError, ValueError):
+            v = 2
+        return max(1, min(3, v))
+
+
+class UtterancesResult(BaseModel):
+    utterances: list[Utterance]
+
+
+# 6.4 점수 ----------------------------------------------------------------------
+
+
+class Reason(BaseModel):
+    kind: str
+    points: float
+    label: str
+    strength: Optional[int] = None
+
+
+class ScoreRow(BaseModel):
+    concept_id: str
+    name: str
+    raw: float
+    pct: int
+    body_pages: list[int]
+    reasons: list[Reason]
+
+
+class ScoresResult(BaseModel):
+    max_raw: float
+    scores: list[ScoreRow]
+
+
+# 6.5 진단 문제와 채점 ------------------------------------------------------------
+
+
+class RubricItem(BaseModel):
+    point: str
+    score: int
+
+
+class Question(BaseModel):
+    question: str
+    answer: str
+    rubric: list[RubricItem]
+    source_pages: list[int] = Field(default_factory=list)
+
+
+STATUS_KNOWN = "앎"
+STATUS_UNSURE = "헷갈림"
+STATUS_UNKNOWN = "모름"
+STATUS_NOT_DIAGNOSED = "진단 안 함"
+
+
+class Grading(BaseModel):
+    score: int
+    max: int = 10
+    rubric_scores: list[int] = Field(default_factory=list)
+    status: str = ""
+    error_type: Optional[str] = None
+    reason: str = ""
+
+    @field_validator("score", mode="before")
+    @classmethod
+    def _clamp_score(cls, v):
+        try:
+            v = int(round(float(v)))
+        except (TypeError, ValueError):
+            v = 0
+        return max(0, min(10, v))
+
+
+# 6.6 우선순위 -------------------------------------------------------------------
+
+
+class PriorityRow(BaseModel):
+    concept_id: str
+    name: str
+    exam_pct: int
+    status: str
+    understanding: float
+    priority: int
+    action: str
+
+
+# 6.7 보완 설명 ------------------------------------------------------------------
+
+
+class Explanation(BaseModel):
+    my_gap: str = ""
+    explanation: str
+    check_pages: list[int] = Field(default_factory=list)
+    source_pages: list[int] = Field(default_factory=list)
+    not_found: bool = False
+    not_found_note: Optional[str] = None
