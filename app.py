@@ -16,8 +16,8 @@ from config import (AUTO_EXPLAIN_TOP, DIAG_MIN_PCT, ESSAY_MIN_PCT, LLM_MODEL, MA
                     MAX_PAGES, STT_MODEL)
 from core import stt
 from core.concepts import NoConceptsError, extract_concepts
-from core.diagnose import (CIRCLED, MODE_MIX, QUESTION_MODES, diag_targets, empty_grading, grade_answer, grade_mcq,
-                           make_question, mcq_answer_text, question_kind)
+from core.diagnose import (CIRCLED, MODE_MIX, QUESTION_MODES, REASON_BLANK, REASON_DONT_KNOW, diag_targets,
+                           empty_grading, grade_answer, grade_mcq, make_question, mcq_answer_text, question_kind)
 from core.explain import explain
 from core.export import to_html
 from core.extract import (SUPPORTED_AUDIO, SUPPORTED_MATERIAL, ExtractError, extract_material, file_ext, is_scanned,
@@ -489,11 +489,15 @@ def _make_questions(ids: list[str]) -> None:
     if not todo:
         return
     usage = Usage()
+
+    def one(cid: str) -> tuple[str, Question]:
+        others = [by_id[x].name for x in ids if x != cid]   # 다른 개념의 핵심을 다시 묻지 않게
+        return cid, make_question(by_id[cid], material, meta, usage, kind=question_kind(pct[cid], mode),
+                                  others=others)
+
     with st.spinner(f"진단 문제 {len(todo)}개 만드는 중…"):
         with ThreadPoolExecutor(max_workers=6) as ex:
-            results = list(ex.map(
-                lambda cid: (cid, make_question(by_id[cid], material, meta, usage, kind=question_kind(pct[cid], mode))),
-                todo))
+            results = list(ex.map(one, todo))
     for cid, q in results:
         st.session_state.questions[cid] = q
     add_usage(usage)
@@ -625,10 +629,11 @@ def _grade_all(ids: list[str]) -> None:
         q = questions[cid]
         if q.is_mcq:
             c = st.session_state.mcq_choice.get(cid)
-            st.session_state.grading[cid] = grade_mcq(q, None if c in (None, -1) else c,
-                                                      st.session_state.guessed.get(cid, False))
-        elif dont_know.get(cid) or not answers.get(cid, "").strip():
-            st.session_state.grading[cid] = empty_grading()
+            st.session_state.grading[cid] = grade_mcq(q, c, st.session_state.guessed.get(cid, False))
+        elif dont_know.get(cid):
+            st.session_state.grading[cid] = empty_grading(REASON_DONT_KNOW)
+        elif not answers.get(cid, "").strip():
+            st.session_state.grading[cid] = empty_grading(REASON_BLANK)
         else:
             jobs.append((cid, answers[cid]))
 

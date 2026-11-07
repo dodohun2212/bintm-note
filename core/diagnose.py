@@ -6,7 +6,7 @@ import hashlib
 import json
 import random
 import re
-from typing import Optional
+from typing import Optional, Sequence
 
 from config import DIAG_MIN_PCT, ESSAY_MIN_PCT
 from core import prompts
@@ -19,6 +19,12 @@ from core.schemas import (QTYPE_ESSAY, QTYPE_MCQ, STATUS_KNOWN, STATUS_UNKNOWN, 
 MCQ_SCORE_SURE = 10
 MCQ_SCORE_GUESS = 5
 MCQ_SCORE_WRONG = 0
+MCQ_DONT_KNOW = -1                # 객관식 "모르겠어요"를 고른 값 (안 고름은 None)
+
+# 답이 없을 때 채점 이유 (AI 호출 없이 0점 모름)
+REASON_BLANK = "답을 비워 두어 모름으로 표시했어요."
+REASON_DONT_KNOW = "'모르겠어요'를 골라 모름으로 표시했어요."
+REASON_NOT_PICKED = "보기를 고르지 않아 모름으로 표시했어요."
 
 
 # 문제 형식 고르기 (S02)
@@ -72,16 +78,27 @@ def _normalize_rubric(items: list[RubricItem]) -> list[RubricItem]:
     return out
 
 
+def other_concepts_text(names: Sequence[str]) -> str:
+    """프롬프트 03-A/03-C의 {{OTHER_CONCEPTS}} 자리. 따로 문제가 나가는 개념 목록."""
+    names = [n for n in names if n]
+    return "\n".join(f"- {n}" for n in names) if names else "(없음)"
+
+
 def make_question(concept: Concept, material: Material, meta_pages: set[int], usage: Optional[Usage] = None,
-                  kind: str = QTYPE_ESSAY) -> Question:
-    """kind가 객관식이면 3-C, 아니면 3-A. 객관식 응답이 형식에 안 맞으면 서술형으로 대신 만든다."""
+                  kind: str = QTYPE_ESSAY, others: Sequence[str] = ()) -> Question:
+    """kind가 객관식이면 3-C, 아니면 3-A. 객관식 응답이 형식에 안 맞으면 서술형으로 대신 만든다.
+
+    others: 함께 진단하는 다른 개념 이름. 개념마다 문제를 동시에 만들기 때문에, 이 목록을 프롬프트에 넣어
+    다른 개념의 핵심(예: 배열 인덱스 계산)을 이 문제에서 다시 묻지 않게 한다.
+    """
     if kind == QTYPE_MCQ:
         try:
-            return make_mcq(concept, material, meta_pages, usage)
+            return make_mcq(concept, material, meta_pages, usage, others)
         except (LLMJsonError, ValueError):
             pass
     pages = evidence_pages(concept.pages, meta_pages)
-    prompt = prompts.fill("03A", CONCEPT_NAME=concept.name, PAGES=pages_to_text(material, pages))
+    prompt = prompts.fill("03A", CONCEPT_NAME=concept.name, PAGES=pages_to_text(material, pages),
+                          OTHER_CONCEPTS=other_concepts_text(others))
     raw = ask_json(prompt, name="03A", max_tokens=2000, usage=usage)
     q = Question.model_validate(raw)
     src = [p for p in q.source_pages if p in pages] or pages[:2]
@@ -120,9 +137,11 @@ def shuffle_choices(choices: list[str], answer_index: int, seed: str) -> tuple[l
     return [choices[i] for i in order], order.index(answer_index)
 
 
-def make_mcq(concept: Concept, material: Material, meta_pages: set[int], usage: Optional[Usage] = None) -> Question:
+def make_mcq(concept: Concept, material: Material, meta_pages: set[int], usage: Optional[Usage] = None,
+             others: Sequence[str] = ()) -> Question:
     pages = evidence_pages(concept.pages, meta_pages)
-    prompt = prompts.fill("03C", CONCEPT_NAME=concept.name, PAGES=pages_to_text(material, pages))
+    prompt = prompts.fill("03C", CONCEPT_NAME=concept.name, PAGES=pages_to_text(material, pages),
+                          OTHER_CONCEPTS=other_concepts_text(others))
     raw = ask_json(prompt, name="03C", max_tokens=2000, usage=usage)
     question, choices, idx, explanation, src = check_mcq(raw)
     choices, idx = shuffle_choices(choices, idx, concept.id + question)
@@ -142,9 +161,11 @@ def mcq_answer_text(question: Question, chosen: Optional[int], guessed: bool = F
 
 
 def grade_mcq(question: Question, chosen: Optional[int], guessed: bool = False) -> Grading:
-    """객관식 채점은 코드가 한다 (AI 호출 없음). chosen=None이면 무응답."""
-    if chosen is None:
-        return empty_grading("'모르겠어요'를 골랐거나 답을 고르지 않아 모름으로 표시했어요.")
+    """객관식 채점은 코드가 한다 (AI 호출 없음). chosen: None = 안 고름, -1 = "모르겠어요"."""
+    if chosen == MCQ_DONT_KNOW:
+        return empty_grading(REASON_DONT_KNOW)
+    if chosen is None or not 0 <= chosen < len(question.choices):
+        return empty_grading(REASON_NOT_PICKED)
     if chosen == question.answer_index:
         if guessed:
             return Grading(score=MCQ_SCORE_GUESS, status=STATUS_UNSURE, error_type="찍어서 맞힘",
@@ -154,7 +175,7 @@ def grade_mcq(question: Question, chosen: Optional[int], guessed: bool = False) 
                    reason=f"{CIRCLED[chosen]}번을 골랐는데 정답은 {CIRCLED[question.answer_index or 0]}번이에요.")
 
 
-def empty_grading(reason: str = "답을 비워두어 모름으로 표시했어요.") -> Grading:
+def empty_grading(reason: str = REASON_BLANK) -> Grading:
     return Grading(score=0, max=10, rubric_scores=[], status=STATUS_UNKNOWN, error_type="무응답", reason=reason)
 
 

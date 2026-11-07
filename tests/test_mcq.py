@@ -49,7 +49,9 @@ def test_grade_mcq_uses_confidence():
     g = grade_mcq(q, 1)
     assert g.status == "모름" and g.error_type == "오답" and g.reason == "②번을 골랐는데 정답은 ③번이에요."
     g = grade_mcq(q, None)
-    assert g.status == "모름" and g.error_type == "무응답"
+    assert g.status == "모름" and g.error_type == "무응답" and "고르지 않아" in g.reason
+    g = grade_mcq(q, -1)
+    assert g.status == "모름" and g.error_type == "무응답" and "모르겠어요" in g.reason
     assert mcq_answer_text(q, 1, guessed=True) == "② b (확신 없이 고름)" and mcq_answer_text(q, None) == ""
 
 
@@ -89,4 +91,36 @@ def test_explain_gets_mcq_context():
 
 
 def test_prompt_03c_placeholders():
-    assert prompts.placeholders("03C") == {"CONCEPT_NAME", "PAGES"}
+    assert prompts.placeholders("03C") == {"CONCEPT_NAME", "PAGES", "OTHER_CONCEPTS"}
+    assert prompts.placeholders("03A") == {"CONCEPT_NAME", "PAGES", "OTHER_CONCEPTS"}
+
+
+def test_question_prompts_list_other_concepts(monkeypatch):
+    """T-23: 문제를 만들 때 함께 진단하는 다른 개념 이름이 프롬프트에 들어가고, 자기 이름은 빠진다."""
+    from core.extract import extract_material
+    from core.schemas import Concept
+
+    material = extract_material(SAMPLE_PDF.read_bytes(), SAMPLE_PDF.name)
+    concept = Concept(id="c1", name="힙의 정의(최대 힙·최소 힙)", pages=[14])
+    seen = {}
+    real = diagnose.ask_json
+
+    def spy(prompt, **kw):
+        seen[kw["name"]] = prompt
+        return real(prompt, **kw)
+
+    monkeypatch.setattr(diagnose, "ask_json", spy)
+    others = ["완전 이진 트리의 배열 표현", "힙의 삽입 연산"]
+    diagnose.make_question(concept, material, set(), kind=QTYPE_MCQ, others=others)
+    diagnose.make_question(concept, material, set(), kind=QTYPE_ESSAY, others=others)
+    for name in ("03C", "03A"):
+        block = seen[name].split("\n<other_concepts>\n")[1].split("</other_concepts>")[0]
+        assert "- 완전 이진 트리의 배열 표현" in block and "- 힙의 삽입 연산" in block
+    diagnose.make_question(concept, material, set(), kind=QTYPE_ESSAY)
+    assert seen["03A"].split("\n<other_concepts>\n")[1].startswith("(없음)")
+
+
+def test_empty_answer_reasons_differ():
+    from core.diagnose import REASON_BLANK, REASON_DONT_KNOW, empty_grading
+    assert empty_grading().reason == REASON_BLANK and "비워" in REASON_BLANK
+    assert "모르겠어요" in empty_grading(REASON_DONT_KNOW).reason
