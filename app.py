@@ -199,7 +199,7 @@ def run_analysis(material_bytes: bytes, material_name: str, audio_bytes: bytes |
 def screen_s01() -> None:
     st.title("📝 빈틈노트")
     st.caption("강의자료와 교수님 강의 녹음 속 강조점, 메타인지 진단으로 시험 전 공부 우선순위를 정해주는 AI 서비스")
-    st.info(NOTICE + " 올린 자료와 대본은 분석을 위해 AI 제공사(Anthropic) 서버로 전송되고, 이 앱의 서버에는 저장하지 않아요.")
+    st.info(NOTICE + " 올린 자료와 녹음은 분석을 위해 AI 제공사(Anthropic, OpenAI) 서버로 전송되고, 이 앱의 서버에는 저장하지 않아요.")
 
     if not has_key():
         st.warning("AI 키가 설정되지 않았어요. README의 설정 방법을 보세요. 키가 있어야 분석 버튼이 열려요. (E-06)")
@@ -214,18 +214,17 @@ def screen_s01() -> None:
         if material_file is not None:
             st.caption(f"{material_file.name} · {material_file.size / 1_000_000:.1f}MB")
     with col2:
-        st.subheader("2. 강의 녹음 대본 (권장)")
-        tab_paste, tab_audio = st.tabs(["대본 붙여넣기", "녹음 파일 (선택)"])
-        with tab_paste:
-            st.caption("녹음은 클로바노트(네이버, 무료)나 휴대폰 녹음 앱의 '텍스트 변환'으로 글자로 바꾼 뒤, 그 글을 그대로 붙여 넣으세요.")
-            pasted = st.text_area("받아쓴 대본을 붙여 넣으세요 (없으면 비워 두세요)", height=160, key="pasted_transcript")
+        st.subheader("2. 강의 녹음 (권장)")
+        tab_audio, tab_paste = st.tabs(["녹음 파일", "대본 붙여넣기"])
         with tab_audio:
             if stt.stt_available() or fake_mode():
                 audio_file = st.file_uploader(f"m4a / mp3 / wav, 최대 {MAX_AUDIO_MB}MB", type=list(SUPPORTED_AUDIO))
             else:
                 audio_file = None
-                st.caption("이 앱은 녹음 파일을 직접 받지 않아요. 대본 붙여넣기 탭을 써 주세요. (운영자가 OPENAI_API_KEY를 넣은 배포에서만 켜져요)")
-            st.caption("교수님 허락을 받은 녹음만, 개인 학습 목적으로만 써 주세요.")
+                st.caption("음성 인식 키가 없어 녹음 파일은 받을 수 없어요. 대본 붙여넣기를 써 주세요.")
+            st.caption("교수님 허락을 받은 녹음만, 개인 학습 목적으로만 올려 주세요.")
+        with tab_paste:
+            pasted = st.text_area("받아쓴 대본을 붙여 넣으세요 (없으면 비워 두세요)", height=160, key="pasted_transcript")
 
     st.divider()
     b1, b2 = st.columns([1, 1])
@@ -503,7 +502,7 @@ def screen_s05() -> None:
 **주의**
 - 출제를 보장하지 않습니다. 공부 우선순위를 정하는 참고용입니다.
 - 녹음은 교수님 허락을 받은 것만, 개인 학습 목적으로만 올려 주세요.
-- 올린 파일은 이 앱의 서버에 저장하지 않습니다. 분석을 위해 AI 제공사(Anthropic) 서버로 전송됩니다. 녹음 파일 업로드를 켠 배포에서는 음성 인식을 위해 OpenAI 서버로도 전송됩니다.
+- 올린 파일은 이 앱의 서버에 저장하지 않습니다. 분석을 위해 AI 제공사(Anthropic, OpenAI) 서버로 전송됩니다.
 - 학번·전화번호·이메일은 AI에 보내기 전에 가립니다.
 """
     )
@@ -511,7 +510,7 @@ def screen_s05() -> None:
     u = st.session_state.usage
     st.table({
         "항목": ["언어 모델", "음성 인식", "진단 개념 수", "가중치 버전", "이번 세션 AI 호출", "입력 토큰", "출력 토큰"],
-        "값": [LLM_MODEL, (STT_MODEL if stt.stt_available() else "안 씀 (대본 붙여넣기)"), str(st.session_state.n_diag),
+        "값": [LLM_MODEL, (STT_MODEL if stt.stt_available() else "꺼짐 (대본 붙여넣기만)"), str(st.session_state.n_diag),
                WEIGHTS_VERSION, str(u["calls"]), str(u["input_tokens"]), str(u["output_tokens"])],
     })
     if fake_mode():
