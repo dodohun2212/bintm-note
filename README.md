@@ -3,7 +3,7 @@
 **강의자료와 교수님 강의 녹음 속 강조점, 메타인지 진단으로 시험 전 공부 우선순위를 정해주는 AI 서비스**
 
 - 배포 URL: https://bintm-note-zeclhcenmubbwjrsrz5bqt.streamlit.app
-- 저장소: (GitHub 주소 기재)
+- 저장소: https://github.com/dodohun2212/bintm-note
 - KOREATECH AI 실습형 이벤트 · Build for Students · 2026-11-11
 
 > 출제를 보장하지 않습니다. 공부 우선순위를 정하는 참고용입니다.
