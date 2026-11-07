@@ -109,11 +109,23 @@ class RubricItem(BaseModel):
     score: int
 
 
+QTYPE_ESSAY = "서술형"
+QTYPE_MCQ = "객관식"
+
+
 class Question(BaseModel):
     question: str
-    answer: str
-    rubric: list[RubricItem]
+    answer: str                        # 서술형: 모범 답안 / 객관식: 정답 보기 글
+    rubric: list[RubricItem] = Field(default_factory=list)   # 서술형만
     source_pages: list[int] = Field(default_factory=list)
+    kind: str = QTYPE_ESSAY
+    choices: list[str] = Field(default_factory=list)        # 객관식 보기 4개 (섞은 뒤 순서)
+    answer_index: Optional[int] = None                      # 객관식 정답 위치 (0부터)
+    explanation: str = ""                                   # 객관식 해설 (왜 정답인지, 오답은 왜 틀렸는지)
+
+    @property
+    def is_mcq(self) -> bool:
+        return self.kind == QTYPE_MCQ
 
 
 STATUS_KNOWN = "앎"

@@ -3,9 +3,10 @@
 
 LLM_MODEL = "claude-sonnet-5-5"   # 이 한 줄만 바꾸면 언어 모델 교체 (예: "claude-haiku-5-5")
 STT_MODEL = "whisper-1"           # None이면 음성 인식 끄기(대본 붙여넣기만 사용)
-N_DIAG_DEFAULT = 5                # 기본 진단 개념 수 (사이드바에서 3~8 조절)
+DIAG_MIN_PCT = 20                 # 출제 가능성이 이 값(%) 이상인 개념은 전부 진단. 미만은 결과와 상관없이 "복습만"
+ESSAY_MIN_PCT = 50                # "섞어서" 모드: 출제 가능성이 이 값 이상이면 서술형, 미만이면 객관식
 MAX_PAGES = 120                   # 분석할 최대 쪽수
 MAX_EVIDENCE_PAGES = 8            # 진단·설명 호출에 넣는 근거 쪽 상한
 MAX_MATERIAL_MB = 30              # 강의자료 파일 크기 상한
 MAX_AUDIO_MB = 25                 # 녹음 파일 크기 상한 (음성 인식 API 제한)
-AUTO_EXPLAIN_TOP = 3              # S04에서 자동으로 설명을 만드는 개수
+AUTO_EXPLAIN_TOP = 3              # S04에서 자동으로 설명을 만드는 상위 개수 ('지금 당장'은 개수와 상관없이 전부)

@@ -55,6 +55,21 @@ def respond(name: str, prompt_text: str) -> dict:
             ],
             "source_pages": pages or [1],
         }
+    if name == "03C":
+        concept = _concept_name(prompt_text)
+        pages = _pages_in(_between(prompt_text, "pages"))[:2]
+        return {
+            "question": f"(가짜 AI 모드) '{concept}'에 대한 설명으로 옳은 것은?",
+            "choices": [
+                f"{concept}의 정의와 절차를 자료에 나온 대로 적은 보기 (정답)",
+                f"{concept}의 절차 순서를 반대로 적은 보기",
+                f"{concept}과 비슷한 다른 개념의 절차를 적은 보기",
+                f"{concept}의 시간 복잡도를 틀리게 적은 보기",
+            ],
+            "answer_index": 0,
+            "explanation": f"(가짜 AI 모드) 실제 AI를 켜면 자료 p.{pages[0] if pages else 1}을 근거로 한 해설이 나옵니다.",
+            "source_pages": pages or [1],
+        }
     if name == "03B":
         answer = _between(prompt_text, "answer").strip()
         if not answer or "모르" in answer:
@@ -71,7 +86,8 @@ def respond(name: str, prompt_text: str) -> dict:
         p = pages[0] if pages else 1
         return {
             "my_gap": f"(가짜 AI 모드) {concept}의 진단 결과를 바탕으로 한 보완 지점.",
-            "explanation": f"(가짜 AI 모드) 실제 AI를 켜면 자료 p.{p}의 문장을 인용한 설명이 여기에 나옵니다 (p.{p}).",
+            "explanation": (f"(가짜 AI 모드) 실제 AI를 켜면 자료 p.{p}의 문장을 인용한 설명이 여기에 나옵니다 (p.{p})."
+                            f"\n\n설명은 2~4개의 짧은 문단으로 나뉘어 나옵니다. 정의, 절차, 이유를 차례로 짚습니다 (p.{p})."),
             "check_pages": pages or [1],
             "source_pages": pages or [1],
             "not_found": False,

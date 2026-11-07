@@ -21,7 +21,7 @@ WEIGHTS = {
 }
 WEIGHTS_VERSION = "v0"
 
-_LABELS = {
+UTTERANCE_LABELS = {
     "emphasis": "강조",
     "exam_hint": "시험 암시",
     "mistake_warning": "실수 경고",
@@ -68,7 +68,7 @@ def score_concept(c: Concept, utterances: list[Utterance], meta_pages: set[int])
             continue
         raw += pts
         short = u.quote if len(u.quote) <= 30 else u.quote[:30] + "…"
-        reasons.append(Reason(kind=u.type, points=round(pts, 2), label=f"{_LABELS.get(u.type, u.type)}: “{short}”", strength=u.strength))
+        reasons.append(Reason(kind=u.type, points=round(pts, 2), label=f"{UTTERANCE_LABELS.get(u.type, u.type)}: “{short}”", strength=u.strength))
     return raw, body_pages, reasons
 
 
