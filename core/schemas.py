@@ -168,6 +168,31 @@ class Grading(BaseModel):
             v = 0
         return max(0, min(10, v))
 
+    @field_validator("rubric_scores", mode="before")
+    @classmethod
+    def _int_scores(cls, v):
+        """AI가 부분 점수(2.5)나 null을 줘도 채점이 깨지지 않게 정수로 바꾼다 (v1.3)."""
+        if not isinstance(v, (list, tuple)):
+            return []
+        out = []
+        for x in v:
+            try:
+                out.append(max(0, int(round(float(x)))))
+            except (TypeError, ValueError):
+                out.append(0)
+        return out
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def _reason_text(cls, v):
+        return "" if v is None else str(v)
+
+    @field_validator("error_type", mode="before")
+    @classmethod
+    def _error_text(cls, v):
+        t = "" if v is None else str(v).strip()
+        return None if not t or t.lower() in ("null", "none") else t
+
 
 # 6.6 우선순위 -------------------------------------------------------------------
 

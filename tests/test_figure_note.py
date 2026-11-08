@@ -182,8 +182,9 @@ def test_t29_note_sections(monkeypatch):
 # ----------------------------------------------------------------- T-30 내보내기에 요약 노트·그림
 
 
-def test_t30_export_has_notes_figures_and_pages():
-    from core.export import to_html
+def test_t30_exports_split_without_page_images():
+    """v1.3: 내려받기를 공부 순서·오답노트 / 요약 노트 두 파일로 나누고, 강의자료 페이지 그림은 넣지 않는다."""
+    from core.export import notes_html, study_html
     from core.schemas import Explanation, NoteSection, Question, ScoreRow, ScoresResult
 
     scores = ScoresResult(max_raw=1, scores=[ScoreRow(concept_id="c1", name="순회", raw=1, pct=80, body_pages=[9],
@@ -192,15 +193,18 @@ def test_t30_export_has_notes_figures_and_pages():
     q = Question(question="아래 트리를 후위 순회하시오.", answer="a b * 다.", source_pages=[9],
                  figure=Figure(kind="tree", nodes=["+", "a", "b"]))
     g = {"c1": Grading(score=0, status="모름", reason="틀림")}
-    exps = {"c1": Explanation(explanation="설명 (p.9)", check_pages=[9, 8], source_pages=[9])}
+    exps = {"c1": Explanation(my_gap="순서 혼동", explanation="설명 (p.9)", check_pages=[9, 8], source_pages=[9])}
     notes = {"c1": NoteSection(concept_id="c1", detail="자세히", summary="<b>요약</b> (p.9)", key_points=["핵심"],
                                pitfalls=["실수"], source_pages=[9])}
-    img = data_uri(render_page(SAMPLE_PDF.read_bytes(), 9, width=300))
-    doc = to_html("s.pdf", scores, g, pri, exps, transcript_used=True, questions={"c1": q}, answer_texts={"c1": "x"},
-                  notes=notes, note_order=["c1"], quotes={"c1": [("시험 힌트", "이건 시험에 내기 좋죠")]},
-                  page_images={9: img})
-    assert doc.count("<h2>") == 6 and "3. 시험 대비 요약 노트" in doc and "6. 강의자료 페이지" in doc
-    assert doc.count("data:image/svg+xml;base64,") == 1                # 문제 그림 (트리)
-    assert 'id="pg-9"' in doc and doc.count("data:image/jpeg") == 1     # 같은 쪽 그림은 한 번만
-    assert 'href="#pg-9"' in doc and '<span class="pg">p.8</span>' in doc
+    study = study_html("s.pdf", scores, g, pri, exps, transcript_used=True, questions={"c1": q},
+                       answer_texts={"c1": "x"})
+    assert "<h2>2. 오답노트</h2>" in study and "요약 노트" not in study
+    assert study.count("아래 트리를 후위 순회하시오.") == 1                # 진단 결과와 보완 설명이 한 카드에 (겹치지 않음)
+    for part in ("내 답", "채점", "모범 답안", "보완 설명", "내가 놓친 점"):
+        assert part in study
+    assert study.count("data:image/svg+xml;base64,") == 1               # 문제 그림 (트리)
+    assert "data:image/jpeg" not in study and 'href="#pg-' not in study  # 강의자료 페이지 그림 없음
+    assert '<span class="pg">p.8</span>' in study
+    doc = notes_html("s.pdf", pri, notes, note_order=["c1"], quotes={"c1": [("시험 힌트", "이건 시험에 내기 좋죠")]})
+    assert "시험 대비 요약 노트" in doc and "오답노트" not in doc and "data:image/jpeg" not in doc
     assert "&lt;b&gt;요약" in doc and "<b>요약" not in doc and "이건 시험에 내기 좋죠" in doc

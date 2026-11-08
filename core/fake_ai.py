@@ -95,13 +95,16 @@ def respond(name: str, prompt_text: str) -> dict:
         }
     if name == "03B":
         answer = _between(prompt_text, "answer").strip()
+        if "#채점실패" in answer:   # 화면 확인용: 채점 실패를 일부러 낸다 (실패한 문제만 다시 채점하는 흐름 확인)
+            from core.llm import LLMJsonError
+            raise LLMJsonError("(가짜 AI 모드) 일부러 낸 채점 실패")
         if not answer or "모르" in answer:
             return {"score": 0, "max": 10, "rubric_scores": [0, 0, 0, 0], "status": "모름",
                     "error_type": "무응답", "reason": "(가짜 AI 모드) 답이 비어 있음."}
         if len(answer) >= 60:
             return {"score": 8, "max": 10, "rubric_scores": [4, 2, 2, 0], "status": "앎",
                     "error_type": None, "reason": "(가짜 AI 모드) 길이로만 판정한 결과이며 실제 채점이 아님."}
-        return {"score": 5, "max": 10, "rubric_scores": [3, 1, 1, 0], "status": "헷갈림",
+        return {"score": 5, "max": 10, "rubric_scores": [3, 1.5, 0.5, 0], "status": "헷갈림",   # 부분 점수 (v1.3)
                 "error_type": "절차 누락", "reason": "(가짜 AI 모드) 길이로만 판정한 결과이며 실제 채점이 아님."}
     if name == "04":
         concept = _concept_name(prompt_text)

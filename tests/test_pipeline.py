@@ -1,4 +1,4 @@
-# T-16 내보내기(HTML), T-17 전체 흐름(요약 노트 포함) (BINTM_FAKE_AI=1 로 저장된 결과 사용)
+# T-16 내보내기(HTML 두 개), T-17 전체 흐름(요약 노트 포함) (BINTM_FAKE_AI=1 로 저장된 결과 사용)
 import os
 from pathlib import Path
 
@@ -7,7 +7,7 @@ os.environ["BINTM_FAKE_AI"] = "1"
 from core.concepts import extract_concepts
 from core.diagnose import diag_targets, grade_answer, grade_mcq, make_question, mcq_answer_text, question_kind
 from core.explain import explain
-from core.export import NOTICE, to_html
+from core.export import NOTICE, notes_html, study_html
 from core.extract import extract_material
 from core.llm import Usage
 from core.note import lecture_order, make_note_section, note_detail
@@ -76,19 +76,26 @@ def test_t17_full_flow_without_real_ai():
     order = [c.id for c in lecture_order(concepts.concepts, meta)]
     assert order[0] == "c1" and len(order) == len(concepts.concepts)
 
-    doc = to_html(material.name, scores, grading, priorities, exps, transcript_used=True, questions=questions,
-                  answer_texts=answers, choices={mcqs[0]: (q.answer_index + 1) % 4}, notes=notes, note_order=order)
-    assert doc.startswith("<!doctype html>") and doc.rstrip().endswith("</html>")
-    assert doc.count("<h2>") == 5 and NOTICE in doc and "시험 대비 요약 노트" in doc
-    assert "객관식" in doc and "서술형" in doc and "내 답" in doc
-    assert 'class="pg"' in doc  # (p.n) 인용이 페이지 배지로
+    choices = {mcqs[0]: (q.answer_index + 1) % 4}
+    study = study_html(material.name, scores, grading, priorities, exps, transcript_used=True, questions=questions,
+                       answer_texts=answers, choices=choices)
+    notes_doc = notes_html(material.name, priorities, notes, note_order=order, transcript_used=True)
+    for doc in (study, notes_doc):
+        assert doc.startswith("<!doctype html>") and doc.rstrip().endswith("</html>")
+        assert NOTICE in doc and "data:image/jpeg" not in doc       # 강의자료 페이지 그림은 넣지 않는다
+    assert "<h2>1. 공부 순서</h2>" in study and "<h2>2. 오답노트</h2>" in study and "요약 노트" not in study
+    assert "객관식" in study and "서술형" in study and "내 답" in study and "보완 설명" in study
+    assert 'class="pg"' in study  # (p.n) 인용이 페이지 배지로
+    assert "시험 대비 요약 노트" in notes_doc and "오답노트" not in notes_doc and "<h2>" not in notes_doc
+    assert notes_doc.count('class="card note') == len(order)
 
 
 def test_t16_export_with_empty_sections():
     from core.schemas import ScoresResult
 
-    doc = to_html("x.pdf", ScoresResult(max_raw=0, scores=[]), {}, [], {}, transcript_used=False)
-    assert "진단하지 않음" in doc and "생성된 설명 없음" in doc and NOTICE in doc and "자료만으로" in doc
+    doc = study_html("x.pdf", ScoresResult(max_raw=0, scores=[]), {}, [], {}, transcript_used=False)
+    assert "진단하지 않음" in doc and "우선순위 없음" in doc and NOTICE in doc and "자료만으로" in doc
+    assert "요약 노트 없음" in notes_html("x.pdf", [], {})
 
 
 def test_export_escapes_html():
@@ -100,6 +107,6 @@ def test_export_escapes_html():
     pri = [PriorityRow(concept_id="c1", name=name, exam_pct=100, status="진단 안 함", understanding=0.5, priority=50,
                        action="지금 당장")]
     exps = {"c1": Explanation(explanation="<img src=x onerror=alert(1)> 설명 (p.3)", source_pages=[3])}
-    doc = to_html("<a.pdf>", scores, {}, pri, exps, transcript_used=False)
+    doc = study_html("<a.pdf>", scores, {}, pri, exps, transcript_used=False)
     assert "<script>" not in doc and "<img" not in doc and "<b>강조" not in doc
     assert "&lt;script&gt;" in doc and '<span class="pg">p.3</span>' in doc

@@ -8,7 +8,7 @@ import random
 import re
 from typing import Optional, Sequence
 
-from config import DIAG_MIN_PCT, ESSAY_MIN_PCT
+from config import AI_MAX_TOKENS, DIAG_MIN_PCT, ESSAY_MIN_PCT
 from core import prompts
 from core.extract import evidence_pages, pages_to_text
 from core.figure import check_figure, figure_problem, figure_text
@@ -117,10 +117,10 @@ def make_question(concept: Concept, material: Material, meta_pages: set[int], us
         return q.model_copy(update={"rubric": _normalize_rubric(q.rubric), "source_pages": src, "kind": QTYPE_ESSAY,
                                     "figure": fig})
 
-    q = parse(ask_json(prompt, name="03A", max_tokens=2000, usage=usage))
+    q = parse(ask_json(prompt, name="03A", max_tokens=AI_MAX_TOKENS, usage=usage))
     why = figure_problem(q.question, q.figure)
     if why:   # 한 번 더 만든다. 그래도 안 되면 두 번째 문제를 쓴다.
-        q = parse(ask_json(prompt + FIX_NOTE.format(why=why), name="03A", max_tokens=2000, usage=usage))
+        q = parse(ask_json(prompt + FIX_NOTE.format(why=why), name="03A", max_tokens=AI_MAX_TOKENS, usage=usage))
     return q
 
 
@@ -162,12 +162,12 @@ def make_mcq(concept: Concept, material: Material, meta_pages: set[int], usage: 
     pages = evidence_pages(concept.pages, meta_pages)
     prompt = prompts.fill("03C", CONCEPT_NAME=concept.name, PAGES=pages_to_text(material, pages),
                           OTHER_CONCEPTS=other_concepts_text(others))
-    raw = ask_json(prompt, name="03C", max_tokens=2000, usage=usage)
+    raw = ask_json(prompt, name="03C", max_tokens=AI_MAX_TOKENS, usage=usage)
     question, choices, idx, explanation, src = check_mcq(raw)
     fig = check_figure(raw.get("figure"))
     why = figure_problem(question, fig)
     if why:
-        raw = ask_json(prompt + FIX_NOTE.format(why=why), name="03C", max_tokens=2000, usage=usage)
+        raw = ask_json(prompt + FIX_NOTE.format(why=why), name="03C", max_tokens=AI_MAX_TOKENS, usage=usage)
         question, choices, idx, explanation, src = check_mcq(raw)
         fig = check_figure(raw.get("figure"))
         why = figure_problem(question, fig)
@@ -204,6 +204,13 @@ def grade_mcq(question: Question, chosen: Optional[int], guessed: bool = False) 
                    reason=f"{CIRCLED[chosen]}번을 골랐는데 정답은 {CIRCLED[question.answer_index or 0]}번이에요.")
 
 
+def is_answered(question: Question, choice: Optional[int] = None, answer: str = "", dont_know: bool = False) -> bool:
+    """채점해도 되는지. 객관식은 보기나 '모르겠어요'를 골라야, 서술형은 답을 쓰거나 '모르겠어요'를 체크해야 한다 (v1.3)."""
+    if question.is_mcq:
+        return choice is not None and (choice == MCQ_DONT_KNOW or 0 <= choice < len(question.choices))
+    return bool(dont_know) or bool((answer or "").strip())
+
+
 def empty_grading(reason: str = REASON_BLANK) -> Grading:
     return Grading(score=0, max=10, rubric_scores=[], status=STATUS_UNKNOWN, error_type="무응답", reason=reason)
 
@@ -229,6 +236,9 @@ def grade_answer(concept: Concept, question: Question, answer: str, material: Ma
         PAGES=pages_to_text(material, pages),
         ANSWER=answer.strip(),
     )
-    raw = ask_json(prompt, name="03B", max_tokens=2000, usage=usage)
+    raw = ask_json(prompt, name="03B", max_tokens=AI_MAX_TOKENS, usage=usage)
     g = Grading.model_validate(raw)
-    return g.model_copy(update={"max": 10, "status": status_from_score(g.score)})
+    rubric_scores = g.rubric_scores
+    if question.rubric and len(rubric_scores) == len(question.rubric):   # 요소 만점을 넘지 않게
+        rubric_scores = [min(s, it.score) for s, it in zip(rubric_scores, question.rubric)]
+    return g.model_copy(update={"max": 10, "status": status_from_score(g.score), "rubric_scores": rubric_scores})

@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from typing import Optional, Sequence
 
-from config import DIAG_MIN_PCT, ESSAY_MIN_PCT
+from config import DIAG_MIN_PCT, ESSAY_MIN_PCT, NOTE_MAX_TOKENS
 from core import prompts
 from core.extract import evidence_pages, pages_to_text
 from core.llm import Usage, ask_json
@@ -80,7 +80,7 @@ def make_note_section(concept: Concept, material: Material, meta_pages: set[int]
     prompt = prompts.fill("05", CONCEPT_NAME=concept.name, DETAIL=detail,
                           CONCEPT_JSON=_concept_json(concept, p, utterances, grading),
                           PAGES=pages_to_text(material, pages))
-    raw = ask_json(prompt, name="05", max_tokens=2500, usage=usage)
+    raw = ask_json(prompt, name="05", max_tokens=NOTE_MAX_TOKENS, usage=usage)
     sec = NoteSection.model_validate({**raw, "concept_id": concept.id, "detail": detail})
     allowed = set(pages)
     limit = 5 if detail == DETAIL_FULL else 3

@@ -13,7 +13,7 @@ import os
 import time
 from typing import Optional
 
-from config import LLM_MODEL
+from config import AI_MAX_TOKENS, LLM_MODEL
 
 
 class LLMError(Exception):
@@ -63,6 +63,8 @@ def extract_json(text: str) -> dict:
         raise LLMJsonError(f"JSON 파싱 실패: {e}") from e
 
 
+MAX_TOKENS_CEILING = 16000   # 잘려서 다시 보낼 때 올리는 상한의 끝
+
 _SYSTEM = (
     "당신은 대학 강의자료 분석 도우미입니다. 요청된 JSON 객체만 출력합니다. "
     "설명 문장, 인사말, 코드 블록 표시(```)를 붙이지 않습니다. "
@@ -74,7 +76,7 @@ def ask_json(
     prompt_text: str,
     *,
     name: str,
-    max_tokens: int = 2000,
+    max_tokens: int = AI_MAX_TOKENS,
     thinking: bool = False,
     usage: Optional[Usage] = None,
 ) -> dict:
@@ -121,5 +123,8 @@ def ask_json(
             return extract_json(text)
         except LLMJsonError as e:
             last_error = e
+            # 답이 길이 상한에서 잘렸으면(속으로 생각하는 몫 포함) 다음 시도는 상한을 두 배로 (v1.3)
+            if getattr(message, "stop_reason", None) == "max_tokens":
+                params["max_tokens"] = min(int(params["max_tokens"]) * 2, MAX_TOKENS_CEILING)
             continue
     raise LLMJsonError(f"두 번 모두 JSON을 읽지 못함: {last_error}")

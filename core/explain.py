@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 
+from config import AI_MAX_TOKENS
 from core import prompts
 from core.diagnose import CIRCLED
 from core.figure import figure_text
@@ -46,7 +47,7 @@ def explain(concept: Concept, material: Material, meta_pages: set[int], status: 
         DIAGNOSIS_JSON=_diagnosis_json(status, question, answer, grading),
         PAGES=pages_to_text(material, pages),
     )
-    raw = ask_json(prompt, name="04", max_tokens=2000, usage=usage)
+    raw = ask_json(prompt, name="04", max_tokens=AI_MAX_TOKENS, usage=usage)
     e = Explanation.model_validate(raw)
     allowed = set(pages)
     return e.model_copy(update={

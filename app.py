@@ -17,15 +17,16 @@ from config import (AUTO_EXPLAIN_TOP, DIAG_MIN_PCT, ESSAY_MIN_PCT, LLM_MODEL, MA
 from core import stt
 from core.concepts import NoConceptsError, extract_concepts
 from core.diagnose import (CIRCLED, MODE_MIX, QUESTION_MODES, REASON_BLANK, REASON_DONT_KNOW, diag_targets,
-                           empty_grading, grade_answer, grade_mcq, make_question, mcq_answer_text, question_kind)
+                           empty_grading, grade_answer, grade_mcq, is_answered, make_question, mcq_answer_text,
+                           question_kind)
 from core.explain import explain
-from core.export import to_html
+from core.export import notes_html, study_html
 from core.extract import (SUPPORTED_AUDIO, SUPPORTED_MATERIAL, ExtractError, extract_material, file_ext, is_scanned,
                           run_id)
 from core.figure import FIGURE_CSS, figure_html
 from core.llm import LLMError, LLMJsonError, LLMKeyError, Usage, fake_mode, has_key
 from core.note import lecture_order, make_note_section, note_detail, professor_quotes, short_section
-from core.pageimg import EXPORT_IMG_WIDTH, PAGE_IMG_WIDTH, data_uri, render_page
+from core.pageimg import PAGE_IMG_WIDTH, render_page
 from core.priority import compute_priorities
 from core.schemas import (DETAIL_FULL, DETAIL_MID, DETAIL_SHORT, STATUS_KNOWN, STATUS_NOT_DIAGNOSED, STATUS_UNKNOWN,
                           STATUS_UNSURE, Concept, ConceptsResult, Explanation, Grading, Material, NoteSection,
@@ -107,6 +108,7 @@ h1 {word-break: keep-all;}
 .bt-tier small {display: block; font-size: .92rem; font-weight: 400; color: #6e7781;}
 .bt-note ul {margin: 2px 0 8px; padding-left: 1.3rem;}
 .bt-quote {font-size: .95rem; color: #6e7781; margin: 2px 0;}
+.bt-miss {color: #cf222e; font-weight: 700; font-size: .95rem; margin: 6px 0 2px;}
 """ + FIGURE_CSS + """
 </style>
 """
@@ -133,6 +135,7 @@ DEFAULTS = dict(
     questions={}, answers={}, dont_know={}, mcq_choice={}, guessed={}, grading={}, priorities=None, explanations={},
     run_id=None, errors=[], usage=None, from_sample=False, diag_ids=[], q_mode=MODE_MIX, q_mode_used=None,
     material_bytes=None, notes={}, notes_failed=[],
+    show_missing=False, grade_failed=[], grade_error=None, explain_failed=[], q_failed=[],
 )
 
 
@@ -499,23 +502,39 @@ def _make_questions(ids: list[str]) -> None:
         return
     usage = Usage()
 
-    def one(cid: str) -> tuple[str, Question]:
+    def one(cid: str) -> tuple[str, Question | Exception]:
         others = [by_id[x].name for x in ids if x != cid]   # 다른 개념의 핵심을 다시 묻지 않게
-        return cid, make_question(by_id[cid], material, meta, usage, kind=question_kind(pct[cid], mode),
-                                  others=others)
+        last: Exception | None = None
+        for _ in range(2):   # 한 개념이 실패해도 나머지 문제는 살린다. 실패한 개념은 한 번 더 만든다
+            try:
+                return cid, make_question(by_id[cid], material, meta, usage, kind=question_kind(pct[cid], mode),
+                                          others=others)
+            except LLMKeyError:
+                raise
+            except Exception as e:   # AI 오류나 형식이 안 맞는 답
+                last = e
+        return cid, last
 
     with st.spinner(f"진단 문제 {len(todo)}개 만드는 중…"):
         with ThreadPoolExecutor(max_workers=6) as ex:
             results = list(ex.map(one, todo))
-    for cid, q in results:
-        st.session_state.questions[cid] = q
     add_usage(usage)
+    failed = [(cid, out) for cid, out in results if isinstance(out, Exception)]
+    if failed and len(failed) == len(results):
+        err = failed[0][1]
+        raise err if isinstance(err, LLMError) else LLMError(f"{type(err).__name__}: {err}")
+    for cid, out in results:
+        if not isinstance(out, Exception):
+            st.session_state.questions[cid] = out
+    if failed:   # 문제를 못 만든 개념은 이번 진단에서 뺀다 (공부 순서에서는 '진단 안 함')
+        st.session_state.q_failed = [by_id[cid].name for cid, _ in failed]
+        st.session_state.diag_ids = [cid for cid in st.session_state.diag_ids if cid in st.session_state.questions]
 
 
 def _is_answered(cid: str, q: Question) -> bool:
-    if q.is_mcq:
-        return st.session_state.get(f"mcq_{cid}") is not None
-    return bool(st.session_state.get(f"dk_{cid}")) or bool(str(st.session_state.get(f"ans_{cid}") or "").strip())
+    """화면 입력칸의 지금 값으로 판단한다 (객관식: 보기나 '모르겠어요', 서술형: 답이나 '모르겠어요')."""
+    return is_answered(q, st.session_state.get(f"mcq_{cid}"), str(st.session_state.get(f"ans_{cid}") or ""),
+                       bool(st.session_state.get(f"dk_{cid}")))
 
 
 def _essay_input(cid: str) -> None:
@@ -579,33 +598,63 @@ def screen_s03() -> None:
     questions: dict[str, Question] = st.session_state.questions
     grading: dict[str, Grading] = st.session_state.grading
     shown = [cid for cid in ids if cid in questions]
-    if grading:
+    pending = [cid for cid in shown if cid not in grading]    # 아직 채점 안 됨 (처음, 또는 채점에 실패한 문제)
+    failed = [cid for cid in st.session_state.grade_failed if cid in pending]
+    if st.session_state.q_failed:
+        st.warning(f"{', '.join(st.session_state.q_failed)}: 문제를 만들지 못해 이번 진단에서 뺐어요. "
+                   "공부 순서에서는 '진단 안 함'으로 계산해요.")
+    if not pending:
         n = {s: sum(1 for g in grading.values() if g.status == s) for s in (STATUS_KNOWN, STATUS_UNSURE, STATUS_UNKNOWN)}
         show(tiles([("앎", n[STATUS_KNOWN], "green"), ("헷갈림", n[STATUS_UNSURE], "amber"),
                     ("모름", n[STATUS_UNKNOWN], "red")]))
+    elif failed:
+        st.error(f"서술형 {len(failed)}문제를 채점하지 못했어요. 아래 빨간 표시가 있는 문제를 확인하고 "
+                 "'채점 못한 문제 다시 채점'을 눌러 주세요. (E-08)")
+        if st.session_state.grade_error:
+            with st.expander("자세한 오류"):
+                st.code(st.session_state.grade_error)
     else:
         n_mcq = sum(1 for cid in shown if questions[cid].is_mcq)
         done = sum(1 for cid in shown if _is_answered(cid, questions[cid]))
         st.progress(done / max(1, len(shown)), text=f"답한 문제 {done} / {len(shown)} · 객관식 {n_mcq} · 서술형 {len(shown) - n_mcq}")
 
-    for i, cid in enumerate(shown, start=1):
+    number = {cid: i for i, cid in enumerate(shown, start=1)}
+    for cid in shown:
         q = questions[cid]
         with st.container(border=True):
-            show(f'<div class="bt-qhead"><span class="bt-qno">Q{i}</span><span class="bt-name">{h(by_id[cid].name)}</span></div>'
+            show(f'<div class="bt-qhead"><span class="bt-qno">Q{number[cid]}</span><span class="bt-name">{h(by_id[cid].name)}</span></div>'
                  f'<div>{badge(q.kind, "kind")}{badge(f"출제 {pct.get(cid, 0)}%", "none")}</div>'
                  f'<div class="bt-q">{h(q.question)}</div>{figure_html(q.figure)}')
             g = grading.get(cid)
             if g is not None:
                 _result_view(cid, q, g)
-            elif q.is_mcq:
+                continue
+            if cid in failed:
+                show('<div class="bt-miss">⚠️ 이 문제는 아직 채점하지 못했어요. 답을 그대로 두고 아래에서 다시 채점해 주세요.</div>')
+            if q.is_mcq:
                 _mcq_input(cid, q)
             else:
                 _essay_input(cid)
+            if st.session_state.show_missing and not _is_answered(cid, q):
+                show('<div class="bt-miss">아직 답하지 않았어요. 모르면 \'모르겠어요\'를 골라 주세요.</div>')
 
-    if not grading:
-        st.caption("객관식은 바로, 서술형은 AI가 자료를 근거로 채점해요.")
-        if st.button("채점하기", type="primary", width="stretch"):
-            _grade_all(shown)
+    if pending:
+        missing = [cid for cid in pending if not _is_answered(cid, questions[cid])]
+        st.caption("모든 문제에 답해야 채점해요. 모르면 '모르겠어요'를 고르면 돼요. "
+                   "객관식은 바로, 서술형은 AI가 자료를 근거로 채점해요.")
+        label = "채점 못한 문제 다시 채점" if failed else "채점하기"
+        if st.button(label, type="primary", width="stretch"):
+            if missing:
+                st.session_state.show_missing = True
+                st.rerun()
+            st.session_state.show_missing = False
+            _grade_all(pending)
+        if st.session_state.show_missing and missing:
+            st.warning("아직 답하지 않은 문제: " + ", ".join(f"Q{number[cid]}" for cid in missing)
+                       + ". 모르면 '모르겠어요'를 골라 주세요.")
+        if failed and len(failed) < len(shown):
+            if st.button("채점 못한 문제는 빼고 공부 순서 보기", width="stretch"):
+                go(4)
     else:
         if st.button("공부 순서 보기 →", type="primary", width="stretch"):
             go(4)
@@ -646,23 +695,26 @@ def _grade_all(ids: list[str]) -> None:
         else:
             jobs.append((cid, answers[cid]))
 
-    def one(job: tuple[str, str]) -> tuple[str, Grading]:
+    def one(job: tuple[str, str]) -> tuple[str, Grading | Exception]:
+        # 한 문제가 실패해도 나머지 채점은 살린다. 실패한 문제는 화면에 표시하고 다시 채점하게 한다 (v1.3)
         cid, ans = job
-        return cid, grade_answer(by_id[cid], questions[cid], ans, material, meta, usage)
+        try:
+            return cid, grade_answer(by_id[cid], questions[cid], ans, material, meta, usage)
+        except Exception as e:
+            return cid, e
 
-    try:
-        with st.spinner(f"서술형 채점 중… ({len(jobs)}개)"):
-            with ThreadPoolExecutor(max_workers=6) as ex:
-                results = list(ex.map(one, jobs))
-    except LLMError as e:
-        st.session_state.grading = {}
-        show_error(error_message(e), str(e))
-        return
-    for cid, g in results:
-        st.session_state.grading[cid] = g
+    with st.spinner(f"서술형 채점 중… ({len(jobs)}개)"):
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            results = list(ex.map(one, jobs))
     add_usage(usage)
+    failed = [(cid, out) for cid, out in results if isinstance(out, Exception)]
+    for cid, out in results:
+        if not isinstance(out, Exception):
+            st.session_state.grading[cid] = out
+    st.session_state.grade_failed = [cid for cid, _ in failed]
+    st.session_state.grade_error = (f"{type(failed[0][1]).__name__}: {failed[0][1]}"[:800] if failed else None)
     st.session_state.priorities = compute_priorities(st.session_state.scores, st.session_state.grading)
-    st.session_state.update(explanations={}, notes={}, notes_failed=[])
+    st.session_state.update(explanations={}, notes={}, notes_failed=[], explain_failed=[])
     st.rerun()
 
 
@@ -672,7 +724,8 @@ def _grade_all(ids: list[str]) -> None:
 def _build_s04(explain_ids: list[str], note_ids: list[str]) -> list[str]:
     """보완 설명(호출 4)과 요약 노트(호출 5)를 한꺼번에 만든다. 세션 상태는 메인 스레드에서만 읽고 쓴다.
 
-    보완 설명이 실패하면 LLMError를 그대로 올린다. 요약 노트는 실패한 개념 이름만 돌려준다(나머지는 보여 줌).
+    한 개념이 실패해도 나머지는 보여 준다. 실패한 개념은 explain_failed / notes_failed에 적고(자동으로 다시 부르지 않음),
+    실패한 개념 id 목록을 돌려준다. 키 오류(LLMKeyError)만 그대로 올린다.
     """
     material: Material = st.session_state.material
     meta = set(st.session_state.concepts.meta_pages)
@@ -687,32 +740,37 @@ def _build_s04(explain_ids: list[str], note_ids: list[str]) -> list[str]:
 
     def one(job: tuple[str, str]):
         kind, cid = job
-        if kind == "ex":
-            return job, explain(by_id[cid], material, meta, status.get(cid, STATUS_NOT_DIAGNOSED), questions.get(cid),
-                                answers.get(cid) if cid in grading else None, grading.get(cid), usage)
         try:
+            if kind == "ex":
+                return job, explain(by_id[cid], material, meta, status.get(cid, STATUS_NOT_DIAGNOSED),
+                                    questions.get(cid), answers.get(cid) if cid in grading else None,
+                                    grading.get(cid), usage)
             return job, make_note_section(by_id[cid], material, meta, prow[cid], utts, grading.get(cid), usage)
-        except LLMError as e:
+        except LLMKeyError:
+            raise
+        except Exception as e:   # AI 오류나 형식이 안 맞는 답
             return job, e
 
     jobs = [("ex", cid) for cid in explain_ids] + [("note", cid) for cid in note_ids]
     with ThreadPoolExecutor(max_workers=8) as ex:
         results = list(ex.map(one, jobs))
-    failed = []
+    failed_ex, failed_note = [], []
     for (kind, cid), out in results:
-        if kind == "ex":
+        if isinstance(out, Exception):
+            (failed_ex if kind == "ex" else failed_note).append(cid)
+        elif kind == "ex":
             st.session_state.explanations[cid] = out
-        elif isinstance(out, Exception):
-            failed.append(cid)
         else:
             st.session_state.notes[cid] = out
-    st.session_state.notes_failed = sorted(set(st.session_state.notes_failed) | set(failed))
+    st.session_state.explain_failed = sorted(set(st.session_state.explain_failed) | set(failed_ex))
+    st.session_state.notes_failed = sorted(set(st.session_state.notes_failed) | set(failed_note))
     add_usage(usage)
-    return failed
+    return failed_ex + failed_note
 
 
-def _explain_many(ids: list[str]) -> None:
-    _build_s04(ids, [])
+def _explain_many(ids: list[str]) -> list[str]:
+    st.session_state.explain_failed = [c for c in st.session_state.explain_failed if c not in ids]
+    return _build_s04(ids, [])
 
 
 @st.cache_data(show_spinner=False, max_entries=400)
@@ -739,8 +797,12 @@ def _concept_block(rank: int, p: PriorityRow) -> None:
     with st.container(border=True):
         show(f'<div class="bt-qhead"><span class="bt-qno">{rank}</span><span class="bt-name">{h(p.name)}</span></div>'
              f"<div>{status_badge(p.status)}{badge(f'출제 {p.exam_pct}%', 'none')}{badge(f'우선순위 {p.priority}', 'kind')}</div>")
+        _review_expander(p.concept_id)
         if e is None:
-            if st.button("설명 보기", key=f"ex_{p.concept_id}"):
+            if p.concept_id in st.session_state.explain_failed:
+                show('<div class="bt-miss">⚠️ 이 개념의 설명을 만들지 못했어요. 아래 버튼으로 다시 만들어 주세요. (E-07)</div>')
+            if st.button("설명 보기" if p.concept_id not in st.session_state.explain_failed else "설명 다시 만들기",
+                         key=f"ex_{p.concept_id}"):
                 try:
                     with st.spinner("설명 만드는 중…"):
                         _explain_many([p.concept_id])
@@ -750,6 +812,37 @@ def _concept_block(rank: int, p: PriorityRow) -> None:
             return
         show(explanation_html(e))
         _page_expander(e.check_pages)
+
+
+def diagnosis_html(cid: str, q: Question, g: Grading) -> str:
+    """S04 오답노트 카드 안에서 보여 줄 진단 결과 (문제, 그림, 내 답, 채점, 정답·해설)."""
+    out = [f'<div class="bt-q">{h(q.question)}</div>{figure_html(q.figure)}',
+           f"<div>{status_badge(g.status)}{badge(f'{g.score}/10', 'none')}"
+           + (badge(g.error_type, "none") if g.error_type else "") + "</div>"]
+    if q.is_mcq:
+        chosen = st.session_state.mcq_choice.get(cid)
+        out.append(choices_html(q, chosen if chosen is not None and chosen >= 0 else None))
+        if chosen == -1:
+            out.append('<div class="bt-pages">내 답: 모르겠어요</div>')
+    else:
+        mine = "" if st.session_state.dont_know.get(cid) else st.session_state.answers.get(cid, "")
+        out.append(f'<span class="bt-lbl">내 답</span><div>{h(mine) or "모르겠어요"}</div>')
+    out.append(f'<span class="bt-lbl">채점</span><div>{page_chips(h(g.reason))}</div>')
+    if q.is_mcq and q.explanation:
+        out.append(f'<span class="bt-lbl">해설</span><div>{page_chips(h(q.explanation))}</div>')
+    elif not q.is_mcq and q.answer:
+        out.append(f'<span class="bt-lbl">모범 답안</span><div>{page_chips(h(q.answer))}</div>')
+    return "".join(out)
+
+
+def _review_expander(cid: str) -> None:
+    """진단한 개념이면 문제와 내 답을 오답노트 카드 안에서 다시 본다 (진단 결과와 보완 설명을 한곳에)."""
+    q = st.session_state.questions.get(cid)
+    g = st.session_state.grading.get(cid)
+    if q is None or g is None:
+        return
+    with st.expander(f"📝 내 문제와 답 다시 보기 · {g.status} {g.score}/10"):
+        show(diagnosis_html(cid, q, g))
 
 
 def _note_block(c: Concept, p: PriorityRow, sec: NoteSection | None) -> None:
@@ -796,34 +889,34 @@ def _note_view(pri: list[PriorityRow]) -> None:
             st.rerun()
 
 
-def _export_doc() -> str:
+def _export_docs() -> tuple[str, str]:
+    """내려받기 두 개: ① 공부 순서·오답노트 ② 시험 대비 요약 노트. 강의자료 페이지 그림은 넣지 않는다 (v1.3)."""
     s = st.session_state
     meta = set(s.concepts.meta_pages)
     order = [c.id for c in lecture_order(s.concepts.concepts, meta)]
     utts = s.utterances or []
     quotes = {cid: [(UTTERANCE_LABELS.get(u.type, u.type), u.quote) for u in professor_quotes(cid, utts)] for cid in order}
-    wanted: set[int] = set()
-    for e in s.explanations.values():
-        wanted |= set(e.check_pages[:2])
-    for sec in s.notes.values():
-        if sec.detail != DETAIL_SHORT:
-            wanted |= set(sec.source_pages[:2])
-    images: dict[int, str] = {}
-    if s.material_bytes:
-        for n in sorted(wanted):
-            img = cached_page_image(s.run_id, n, EXPORT_IMG_WIDTH, s.material_bytes)
-            if img:
-                images[n] = data_uri(img)
-    return to_html(s.material.name, s.scores, s.grading, s.priorities, s.explanations,
-                   transcript_used=bool(s.transcript), questions=s.questions, answer_texts=_answer_texts(),
-                   choices={cid: (c if c is not None and c >= 0 else None) for cid, c in s.mcq_choice.items()},
-                   notes=s.notes, note_order=order, quotes=quotes, page_images=images)
+    study = study_html(s.material.name, s.scores, s.grading, s.priorities, s.explanations,
+                       transcript_used=bool(s.transcript), questions=s.questions, answer_texts=_answer_texts(),
+                       choices={cid: (c if c is not None and c >= 0 else None) for cid, c in s.mcq_choice.items()})
+    notes = notes_html(s.material.name, s.priorities, s.notes, note_order=order, quotes=quotes,
+                       transcript_used=bool(s.transcript))
+    return study, notes
 
 
-def _download(key: str, doc: str) -> None:
-    st.download_button("📥 결과 내려받기 (HTML)", data=doc.encode("utf-8"), key=key, type="primary", width="stretch",
-                       file_name=f"빈틈노트_결과_{date.today().isoformat()}.html", mime="text/html",
-                       help="요약 노트와 강의자료 페이지 그림까지 파일 하나에 들어 있어요. 인터넷 없이도 열려요.")
+def _downloads(key: str, docs: tuple[str, str]) -> None:
+    study, notes = docs
+    today = date.today().isoformat()
+    c1, c2 = st.columns(2)
+    with c1:
+        st.download_button("📥 공부 순서·오답노트 내려받기", data=study.encode("utf-8"), key=f"{key}_study",
+                           type="primary", width="stretch", file_name=f"빈틈노트_공부순서_오답노트_{today}.html",
+                           mime="text/html", help="공부 순서와, 문제·내 답·채점·정답·보완 설명을 한 카드에 모은 오답노트. "
+                                                 "HTML 파일이라 인터넷 없이 브라우저로 열려요.")
+    with c2:
+        st.download_button("📒 요약 노트 내려받기", data=notes.encode("utf-8"), key=f"{key}_notes", width="stretch",
+                           file_name=f"빈틈노트_요약노트_{today}.html", mime="text/html",
+                           help="강의 순서대로 정리한 시험 대비 요약 노트만 따로 담은 HTML 파일이에요.")
 
 
 def screen_s04() -> None:
@@ -843,7 +936,8 @@ def screen_s04() -> None:
         if note_detail(p) == DETAIL_SHORT and p.concept_id not in st.session_state.notes and p.concept_id in by_id:
             st.session_state.notes[p.concept_id] = short_section(by_id[p.concept_id], meta)
     want = {p.concept_id for p in pri[:AUTO_EXPLAIN_TOP]} | {p.concept_id for p in pri if p.action == "지금 당장"}
-    auto = [p.concept_id for p in pri if p.concept_id in want and p.concept_id not in st.session_state.explanations]
+    auto = [p.concept_id for p in pri if p.concept_id in want and p.concept_id not in st.session_state.explanations
+            and p.concept_id not in st.session_state.explain_failed]
     note_ids = [p.concept_id for p in pri if p.concept_id not in st.session_state.notes and p.concept_id in by_id
                 and p.concept_id not in st.session_state.notes_failed]
     if auto or note_ids:
@@ -852,14 +946,15 @@ def screen_s04() -> None:
             with st.spinner(" · ".join(w for w in what if w) + " 만드는 중…"):
                 failed = _build_s04(auto, note_ids)
             if failed:
-                st.warning(f"요약 노트 {len(failed)}개를 만들지 못했어요. 요약 노트 탭 아래의 '다시 만들기'를 눌러 주세요. (E-07)")
+                st.warning(f"보완 설명·요약 노트 {len(failed)}개를 만들지 못했어요. 빨간 표시가 있는 카드의 '다시 만들기' "
+                           "버튼을 눌러 주세요. (E-07)")
         except LLMError as e:
             show_error(error_message(e), str(e))
 
-    doc = _export_doc()
-    _download("dl_top", doc)
+    docs = _export_docs()
+    _downloads("dl_top", docs)
 
-    tab_plan, tab_note = st.tabs(["🎯 공부 순서와 보완 설명", "📒 시험 대비 요약 노트"], key="s04_tabs")
+    tab_plan, tab_note = st.tabs(["🎯 공부 순서와 오답노트", "📒 시험 대비 요약 노트"], key="s04_tabs")
     with tab_plan:
         for tier, note in TIERS:
             rows = [p for p in pri if p.action == tier]
@@ -899,13 +994,10 @@ def screen_s04() -> None:
         _note_view(pri)
 
     st.divider()
-    c1, c2 = st.columns(2)
-    with c1:
-        _download("dl_bottom", doc)
-    with c2:
-        if st.button("다른 자료로 다시", width="stretch"):
-            reset_state()
-            go(1)
+    _downloads("dl_bottom", docs)
+    if st.button("다른 자료로 다시", width="stretch"):
+        reset_state()
+        go(1)
 
 
 # ----------------------------------------------------------------- 화면 S05
@@ -918,8 +1010,9 @@ def screen_s05() -> None:
 **사용 방법**
 1. 강의자료(PDF/PPTX)와 녹음(또는 대본)을 올리고 **분석 시작**
 2. ② 출제 포인트 순위와 근거를 확인
-3. ③ 출제 가능성 {DIAG_MIN_PCT}% 이상인 개념을 전부 객관식·서술형 문제로 진단
-4. ④ 공부 순서와 자료 근거 보완 설명(오답노트), 강의 순서대로 정리한 **시험 대비 요약 노트**를 보고, 결과를 HTML 파일로 저장
+3. ③ 출제 가능성 {DIAG_MIN_PCT}% 이상인 개념을 전부 객관식·서술형 문제로 진단 (모든 문제에 답해야 채점, 모르면 '모르겠어요')
+4. ④ 공부 순서와 오답노트(문제·내 답·채점·보완 설명), 강의 순서대로 정리한 **시험 대비 요약 노트**를 보고,
+   **공부 순서·오답노트**와 **요약 노트**를 HTML 파일로 따로 저장
 
 **주의**
 - 출제를 보장하지 않습니다. 공부 우선순위를 정하는 참고용입니다.
