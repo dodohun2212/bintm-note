@@ -217,6 +217,7 @@ class Explanation(BaseModel):
     source_pages: list[int] = Field(default_factory=list)
     not_found: bool = False
     not_found_note: Optional[str] = None
+    confusion_reply: Optional[str] = None   # 학생이 적은 "헷갈린 점"에 대한 답 (v1.4). 적지 않았으면 None
 
 
 # 6.9 시험 대비 요약 노트 ----------------------------------------------------------

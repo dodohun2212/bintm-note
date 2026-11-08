@@ -70,6 +70,10 @@ page-break-inside:avoid}
 .gap{border-left:4px solid var(--unknown);background:var(--unknown-bg);padding:8px 12px;border-radius:0 8px 8px 0;
 margin:0 0 12px}
 .gap b{display:block;font-size:13px;color:var(--unknown)}
+.ask{border-left:4px solid var(--accent);background:var(--accent-soft);padding:8px 12px;border-radius:0 8px 8px 0;
+margin:0 0 12px}
+.ask b{display:block;font-size:13px;color:var(--accent)}
+.ask .my{display:block;color:var(--sub);margin:2px 0 6px}
 .card p{margin:0 0 10px}
 .pg{display:inline-block;font-size:12px;font-weight:600;color:var(--accent);background:var(--accent-soft);
 border-radius:6px;padding:0 6px;margin:0 2px;white-space:nowrap}
@@ -166,10 +170,13 @@ def _priority_section(priorities: list[PriorityRow], reasons: dict[str, list[str
     return "\n".join(out)
 
 
-def _explanation_part(e: Explanation) -> str:
+def _explanation_part(e: Explanation, confusion: str = "") -> str:
     out = []
     if e.my_gap:
         out.append(f'<div class="gap"><b>내가 놓친 점</b>{_e(e.my_gap)}</div>')
+    if confusion and e.confusion_reply:   # 학생이 적은 '헷갈린 점'에 대한 답 (v1.4)
+        out.append(f'<div class="ask"><b>내가 헷갈린 점에 대한 답</b><span class="my">“{_e(confusion)}”</span>'
+                   f"{_with_page_chips(_e(e.confusion_reply))}</div>")
     out.append(_paragraphs(e.explanation))
     if e.not_found:
         out.append(f'<div class="warn">올린 자료에서 찾지 못함 · {_e(e.not_found_note or "")} '
@@ -180,8 +187,11 @@ def _explanation_part(e: Explanation) -> str:
 
 
 def review_card(rank: int, p: PriorityRow, q: Optional[Question], g: Optional[Grading], answer_text: str,
-                chosen: Optional[int], e: Optional[Explanation]) -> str:
-    """오답노트 카드 하나: 문제 → 내 답 → 채점 → 정답·해설 → 보완 설명. 진단 결과와 보완 설명을 한곳에 모은다."""
+                chosen: Optional[int], e: Optional[Explanation], confusion: str = "") -> str:
+    """오답노트 카드 하나: 문제 → 내 답 → 채점 → 정답·해설 → 보완 설명. 진단 결과와 보완 설명을 한곳에 모은다.
+
+    confusion: 객관식에서 '확신 없이 골랐어요'와 함께 학생이 적은 헷갈린 점 (v1.4).
+    """
     badges = [_status_badge(p.status)]
     if g is not None:
         badges.append(f'<span class="badge none">{g.score}/10</span>')
@@ -205,6 +215,8 @@ def review_card(rank: int, p: PriorityRow, q: Optional[Question], g: Optional[Gr
             out.append(f'<ol class="choices">{"".join(items)}</ol>')
             if chosen is None:
                 out.append('<p class="small">내 답: 모르겠어요</p>')
+            if confusion and not (e is not None and e.confusion_reply):   # 답이 있으면 보완 설명 칸에서 함께 보여 준다
+                out.append(f'<span class="lbl">내가 헷갈린 점</span><p class="ans">“{_e(confusion)}”</p>')
         else:
             out.append(f'<span class="lbl">내 답</span><p class="ans">{_e(answer_text or "모르겠어요")}</p>')
     if g is not None:
@@ -215,7 +227,7 @@ def review_card(rank: int, p: PriorityRow, q: Optional[Question], g: Optional[Gr
         elif not q.is_mcq and q.answer:
             out.append(f'<span class="lbl">모범 답안</span><p class="ans">{_with_page_chips(_e(q.answer))}</p>')
     if e is not None:
-        out.append('<div class="sec">보완 설명</div>' + _explanation_part(e))
+        out.append('<div class="sec">보완 설명</div>' + _explanation_part(e, confusion))
     elif q is not None and q.source_pages:
         out.append(f'<div class="pages">근거 페이지: {_pg(q.source_pages)}</div>')
     return "".join(out)
@@ -224,16 +236,18 @@ def review_card(rank: int, p: PriorityRow, q: Optional[Question], g: Optional[Gr
 def study_html(material_name: str, scores: ScoresResult, grading: dict[str, Grading], priorities: list[PriorityRow],
                explanations: dict[str, Explanation], transcript_used: bool,
                questions: Optional[dict[str, Question]] = None, answer_texts: Optional[dict[str, str]] = None,
-               choices: Optional[dict[str, Optional[int]]] = None, today: Optional[date] = None) -> str:
+               choices: Optional[dict[str, Optional[int]]] = None, today: Optional[date] = None,
+               confusions: Optional[dict[str, str]] = None) -> str:
     """내려받기 ① 공부 순서·오답노트.
 
     1. 공부 순서(출제 근거 포함) 2. 오답노트(틀림·헷갈림, 공부 순서대로) 3. 맞힌 문제(접어 둠)
-    4. 진단하지 않은 개념의 보완 설명(있을 때만). choices의 None은 '모르겠어요'.
+    4. 진단하지 않은 개념의 보완 설명(있을 때만). choices의 None은 '모르겠어요'. confusions는 학생이 적은 헷갈린 점.
     """
     today = today or date.today()
     questions = questions or {}
     answer_texts = answer_texts or {}
     choices = choices or {}
+    confusions = confusions or {}
     reasons = {s.concept_id: [r.label for r in s.reasons] for s in scores.scores}
     rank = {p.concept_id: i for i, p in enumerate(priorities, start=1)}
     tier_count = {t: sum(1 for p in priorities if p.action == t) for t in TIERS}
@@ -241,7 +255,7 @@ def study_html(material_name: str, scores: ScoresResult, grading: dict[str, Grad
     def card(p: PriorityRow) -> str:
         cid = p.concept_id
         return review_card(rank[cid], p, questions.get(cid), grading.get(cid), answer_texts.get(cid, ""),
-                           choices.get(cid), explanations.get(cid))
+                           choices.get(cid), explanations.get(cid), confusions.get(cid, ""))
 
     body = _head(f"빈틈노트 공부 순서·오답노트 · {material_name}", "빈틈노트 공부 순서·오답노트", material_name, today,
                  transcript_used)

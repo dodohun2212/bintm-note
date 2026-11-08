@@ -108,6 +108,7 @@ def respond(name: str, prompt_text: str) -> dict:
                 "error_type": "절차 누락", "reason": "(가짜 AI 모드) 길이로만 판정한 결과이며 실제 채점이 아님."}
     if name == "04":
         concept = _concept_name(prompt_text)
+        confusion = _between(prompt_text, "student_confusion").strip()
         pages = _pages_in(_between(prompt_text, "pages"))[:2]
         p = pages[0] if pages else 1
         return {
@@ -118,6 +119,9 @@ def respond(name: str, prompt_text: str) -> dict:
             "source_pages": pages or [1],
             "not_found": False,
             "not_found_note": None,
+            "confusion_reply": (None if confusion in ("", "(없음)") else
+                                "(가짜 AI 모드) 실제 AI를 켜면 학생이 적은 헷갈린 점에 자료 문장을 인용해 바로 답한다. "
+                                f"헷갈린 두 가지가 어떻게 다른지, 어느 쪽이 맞는지 짚는다 (p.{p})."),
         }
     if name == "05":
         concept = _concept_name(prompt_text)

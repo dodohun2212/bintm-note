@@ -12,8 +12,8 @@ from pathlib import Path
 
 import streamlit as st
 
-from config import (AUTO_EXPLAIN_TOP, DIAG_MIN_PCT, ESSAY_MIN_PCT, LLM_MODEL, MAX_AUDIO_MB, MAX_MATERIAL_MB,
-                    MAX_PAGES, STT_MODEL)
+from config import (AUTO_EXPLAIN_TOP, CONFUSION_MAX_CHARS, DIAG_MIN_PCT, ESSAY_MIN_PCT, LLM_MODEL, MAX_AUDIO_MB,
+                    MAX_MATERIAL_MB, MAX_PAGES, STT_MODEL)
 from core import stt
 from core.concepts import NoConceptsError, extract_concepts
 from core.diagnose import (CIRCLED, MODE_MIX, QUESTION_MODES, REASON_BLANK, REASON_DONT_KNOW, diag_targets,
@@ -95,6 +95,10 @@ h1 {word-break: keep-all;}
   border-radius: 0 8px 8px 0; margin: 4px 0 12px;}
 .bt-gap b {display: block; font-size: .82rem; color: #cf222e;}
 .bt-ex p {margin: 0 0 12px;}
+.bt-ask {border-left: 4px solid #2563eb; background: rgba(37,99,235,.07); padding: 8px 12px;
+  border-radius: 0 8px 8px 0; margin: 4px 0 12px;}
+.bt-ask b {display: block; font-size: .82rem; color: #2563eb;}
+.bt-ask .bt-my {display: block; color: #6e7781; font-size: .95rem; margin: 2px 0 6px;}
 .bt-pg {display: inline-block; font-size: .78rem; font-weight: 700; color: #2563eb; background: rgba(37,99,235,.11);
   border-radius: 6px; padding: 0 6px; margin: 0 2px; white-space: nowrap;}
 .bt-warn {background: rgba(212,167,44,.16); border-radius: 8px; padding: 8px 12px; font-size: .95rem; margin: 0 0 10px;}
@@ -132,8 +136,8 @@ def load_secrets_into_env() -> None:
 
 DEFAULTS = dict(
     step=1, material=None, transcript=None, transcript_source=None, concepts=None, utterances=None, scores=None,
-    questions={}, answers={}, dont_know={}, mcq_choice={}, guessed={}, grading={}, priorities=None, explanations={},
-    run_id=None, errors=[], usage=None, from_sample=False, diag_ids=[], q_mode=MODE_MIX, q_mode_used=None,
+    questions={}, answers={}, dont_know={}, mcq_choice={}, guessed={}, confusion={}, grading={}, priorities=None,
+    explanations={}, run_id=None, errors=[], usage=None, from_sample=False, diag_ids=[], q_mode=MODE_MIX, q_mode_used=None,
     material_bytes=None, notes={}, notes_failed=[],
     show_missing=False, grade_failed=[], grade_error=None, explain_failed=[], q_failed=[],
 )
@@ -251,10 +255,22 @@ def concept_row(rank: int, s: ScoreRow, dim: bool = False) -> str:
             f'<div>{reason_chips(s.reasons)}</div></div><div class="bt-pct">{s.pct}%</div></div>')
 
 
-def explanation_html(e: Explanation) -> str:
+def confusion_html(confusion: str, reply: str | None = None) -> str:
+    """학생이 적은 '헷갈린 점'과 (있으면) 그에 대한 답 (v1.4)."""
+    if not confusion:
+        return ""
+    if reply:
+        return (f'<div class="bt-ask"><b>💬 내가 헷갈린 점에 대한 답</b><span class="bt-my">“{h(confusion)}”</span>'
+                f"{page_chips(h(reply))}</div>")
+    return f'<span class="bt-lbl">💬 내가 헷갈린 점</span><div>“{h(confusion)}”</div>'
+
+
+def explanation_html(e: Explanation, confusion: str = "") -> str:
     out = []
     if e.my_gap:
         out.append(f'<div class="bt-gap"><b>내가 놓친 점</b>{h(e.my_gap)}</div>')
+    if confusion and e.confusion_reply:
+        out.append(confusion_html(confusion, e.confusion_reply))
     out.append(f'<div class="bt-ex">{paragraphs(e.explanation)}</div>')
     if e.not_found:
         out.append(f'<div class="bt-warn">⚠️ 올린 자료에서 찾지 못함 · {h(e.not_found_note or "")} '
@@ -358,7 +374,8 @@ def run_analysis(material_bytes: bytes, material_name: str, audio_bytes: bytes |
 
     st.session_state.update(material=material, transcript=transcript, transcript_source=source, concepts=concepts,
                             utterances=utts, scores=scores, run_id=rid, from_sample=from_sample, questions={},
-                            answers={}, dont_know={}, mcq_choice={}, guessed={}, grading={}, priorities=None,
+                            answers={}, dont_know={}, mcq_choice={}, guessed={}, confusion={}, grading={},
+                            priorities=None,
                             explanations={}, diag_ids=[], q_mode_used=None, notes={}, notes_failed=[],
                             material_bytes=material_bytes if material.kind == "pdf" else None)
     if transcript and not utts:
@@ -482,7 +499,7 @@ def screen_s02() -> None:
     label = "진단 결과 보기 →" if graded else f"{len(targets)}개 개념 진단하기 →"
     if st.button(label, type="primary", width="stretch"):
         if not graded and st.session_state.q_mode_used != mode:
-            st.session_state.update(questions={}, answers={}, dont_know={}, mcq_choice={}, guessed={})
+            st.session_state.update(questions={}, answers={}, dont_know={}, mcq_choice={}, guessed={}, confusion={})
         st.session_state.q_mode_used = mode
         st.session_state.diag_ids = targets
         go(3)
@@ -553,10 +570,25 @@ def _mcq_input(cid: str, q: Question) -> None:
                       format_func=lambda i: "모르겠어요" if i == -1 else f"{CIRCLED[i]} {q.choices[i]}")
     st.session_state.mcq_choice[cid] = choice
     if choice is not None and choice >= 0:
-        st.session_state.guessed[cid] = st.checkbox("확신 없이 골랐어요 (찍었어요)", key=f"guess_{cid}",
-                                                    value=st.session_state.guessed.get(cid, False))
+        guessed = st.checkbox("확신 없이 골랐어요 (찍었어요)", key=f"guess_{cid}",
+                              value=st.session_state.guessed.get(cid, False))
+        st.session_state.guessed[cid] = guessed
+        if guessed:   # 설문의 '기타'처럼, 체크하면 아래에 입력칸이 생긴다 (v1.4). 비워 둬도 채점한다
+            st.session_state.confusion[cid] = st.text_area(
+                "어떤 점이 헷갈렸나요? (선택)", key=f"conf_{cid}", height=80, max_chars=CONFUSION_MAX_CHARS,
+                value=st.session_state.confusion.get(cid, ""),
+                placeholder="예: ②와 ③ 중에 고민했어요. 두 방법이 어떻게 다른지 모르겠어요.",
+                help="적어 주면 ④ 결과의 보완 설명에서 이 부분을 콕 집어 답해요. 비워 둬도 채점돼요.")
     else:
         st.session_state.guessed[cid] = False
+
+
+def _confusion(cid: str) -> str:
+    """객관식에서 보기를 고르고 '확신 없이 골랐어요'를 체크했을 때만 '헷갈린 점' 글을 쓴다 (v1.4)."""
+    c = st.session_state.mcq_choice.get(cid)
+    if c is None or c < 0 or not st.session_state.guessed.get(cid):
+        return ""
+    return " ".join(str(st.session_state.confusion.get(cid) or "").split())
 
 
 def _result_view(cid: str, q: Question, g: Grading) -> None:
@@ -564,6 +596,7 @@ def _result_view(cid: str, q: Question, g: Grading) -> None:
     if q.is_mcq:
         chosen = st.session_state.mcq_choice.get(cid)
         body = choices_html(q, chosen if chosen is not None and chosen >= 0 else None)
+        body += confusion_html(_confusion(cid))
         if q.explanation:
             body += f'<span class="bt-lbl">해설</span><div>{page_chips(h(q.explanation))}</div>'
         if q.source_pages:
@@ -734,6 +767,7 @@ def _build_s04(explain_ids: list[str], note_ids: list[str]) -> list[str]:
     status = {cid: p.status for cid, p in prow.items()}
     questions = dict(st.session_state.questions)
     answers = _answer_texts()
+    confusions = {cid: _confusion(cid) for cid in explain_ids}
     grading = dict(st.session_state.grading)
     utts = list(st.session_state.utterances or [])
     usage = Usage()
@@ -744,7 +778,7 @@ def _build_s04(explain_ids: list[str], note_ids: list[str]) -> list[str]:
             if kind == "ex":
                 return job, explain(by_id[cid], material, meta, status.get(cid, STATUS_NOT_DIAGNOSED),
                                     questions.get(cid), answers.get(cid) if cid in grading else None,
-                                    grading.get(cid), usage)
+                                    grading.get(cid), usage, confusion=confusions.get(cid, ""))
             return job, make_note_section(by_id[cid], material, meta, prow[cid], utts, grading.get(cid), usage)
         except LLMKeyError:
             raise
@@ -810,7 +844,7 @@ def _concept_block(rank: int, p: PriorityRow) -> None:
                 except LLMError as err:
                     show_error(error_message(err), str(err))
             return
-        show(explanation_html(e))
+        show(explanation_html(e, _confusion(p.concept_id)))
         _page_expander(e.check_pages)
 
 
@@ -824,6 +858,9 @@ def diagnosis_html(cid: str, q: Question, g: Grading) -> str:
         out.append(choices_html(q, chosen if chosen is not None and chosen >= 0 else None))
         if chosen == -1:
             out.append('<div class="bt-pages">내 답: 모르겠어요</div>')
+        e = st.session_state.explanations.get(cid)
+        if not (e is not None and e.confusion_reply):   # 답이 있으면 보완 설명 칸에서 질문과 함께 보여 준다
+            out.append(confusion_html(_confusion(cid)))
     else:
         mine = "" if st.session_state.dont_know.get(cid) else st.session_state.answers.get(cid, "")
         out.append(f'<span class="bt-lbl">내 답</span><div>{h(mine) or "모르겠어요"}</div>')
@@ -898,7 +935,8 @@ def _export_docs() -> tuple[str, str]:
     quotes = {cid: [(UTTERANCE_LABELS.get(u.type, u.type), u.quote) for u in professor_quotes(cid, utts)] for cid in order}
     study = study_html(s.material.name, s.scores, s.grading, s.priorities, s.explanations,
                        transcript_used=bool(s.transcript), questions=s.questions, answer_texts=_answer_texts(),
-                       choices={cid: (c if c is not None and c >= 0 else None) for cid, c in s.mcq_choice.items()})
+                       choices={cid: (c if c is not None and c >= 0 else None) for cid, c in s.mcq_choice.items()},
+                       confusions={cid: _confusion(cid) for cid in s.questions})
     notes = notes_html(s.material.name, s.priorities, s.notes, note_order=order, quotes=quotes,
                        transcript_used=bool(s.transcript))
     return study, notes
@@ -929,13 +967,14 @@ def screen_s04() -> None:
     show(tiles([("지금 당장", count["지금 당장"], "red"), ("다음", count["다음"], "amber"),
                 ("복습만", count["복습만"], "green")]))
 
-    # 자동으로 만드는 것: 보완 설명('지금 당장' 전부 + 상위 N개)과 요약 노트('자세히'·'보통'). '짧게'는 AI 호출 없음.
+    # 자동으로 만드는 것: 보완 설명('지금 당장' 전부 + 상위 N개 + 헷갈린 점을 적은 개념)과 요약 노트('자세히'·'보통'). '짧게'는 AI 호출 없음.
     by_id = {c.id: c for c in st.session_state.concepts.concepts}
     meta = set(st.session_state.concepts.meta_pages)
     for p in pri:
         if note_detail(p) == DETAIL_SHORT and p.concept_id not in st.session_state.notes and p.concept_id in by_id:
             st.session_state.notes[p.concept_id] = short_section(by_id[p.concept_id], meta)
-    want = {p.concept_id for p in pri[:AUTO_EXPLAIN_TOP]} | {p.concept_id for p in pri if p.action == "지금 당장"}
+    want = ({p.concept_id for p in pri[:AUTO_EXPLAIN_TOP]} | {p.concept_id for p in pri if p.action == "지금 당장"}
+            | {p.concept_id for p in pri if _confusion(p.concept_id)})   # 헷갈린 점을 적은 개념은 바로 답한다 (v1.4)
     auto = [p.concept_id for p in pri if p.concept_id in want and p.concept_id not in st.session_state.explanations
             and p.concept_id not in st.session_state.explain_failed]
     note_ids = [p.concept_id for p in pri if p.concept_id not in st.session_state.notes and p.concept_id in by_id
