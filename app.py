@@ -22,10 +22,14 @@ from core.explain import explain
 from core.export import to_html
 from core.extract import (SUPPORTED_AUDIO, SUPPORTED_MATERIAL, ExtractError, extract_material, file_ext, is_scanned,
                           run_id)
+from core.figure import FIGURE_CSS, figure_html
 from core.llm import LLMError, LLMJsonError, LLMKeyError, Usage, fake_mode, has_key
+from core.note import lecture_order, make_note_section, note_detail, professor_quotes, short_section
+from core.pageimg import EXPORT_IMG_WIDTH, PAGE_IMG_WIDTH, data_uri, render_page
 from core.priority import compute_priorities
-from core.schemas import (STATUS_KNOWN, STATUS_NOT_DIAGNOSED, STATUS_UNKNOWN, STATUS_UNSURE, Concept, ConceptsResult,
-                          Explanation, Grading, Material, PriorityRow, Question, ScoreRow, Utterance)
+from core.schemas import (DETAIL_FULL, DETAIL_MID, DETAIL_SHORT, STATUS_KNOWN, STATUS_NOT_DIAGNOSED, STATUS_UNKNOWN,
+                          STATUS_UNSURE, Concept, ConceptsResult, Explanation, Grading, Material, NoteSection,
+                          PriorityRow, Question, ScoreRow, Utterance)
 from core.score import UTTERANCE_LABELS, WEIGHTS_VERSION, compute_scores
 from core.stt import STTError
 from core.utterances import find_utterances
@@ -101,6 +105,9 @@ h1 {word-break: keep-all;}
 .bt .bt-choices li.picked:not(.right) {border-color: rgba(207,34,46,.6); background: rgba(207,34,46,.08);}
 .bt-tier {font-size: 1.3rem; font-weight: 800; margin: 18px 0 0;}
 .bt-tier small {display: block; font-size: .92rem; font-weight: 400; color: #6e7781;}
+.bt-note ul {margin: 2px 0 8px; padding-left: 1.3rem;}
+.bt-quote {font-size: .95rem; color: #6e7781; margin: 2px 0;}
+""" + FIGURE_CSS + """
 </style>
 """
 
@@ -125,6 +132,7 @@ DEFAULTS = dict(
     step=1, material=None, transcript=None, transcript_source=None, concepts=None, utterances=None, scores=None,
     questions={}, answers={}, dont_know={}, mcq_choice={}, guessed={}, grading={}, priorities=None, explanations={},
     run_id=None, errors=[], usage=None, from_sample=False, diag_ids=[], q_mode=MODE_MIX, q_mode_used=None,
+    material_bytes=None, notes={}, notes_failed=[],
 )
 
 
@@ -348,7 +356,8 @@ def run_analysis(material_bytes: bytes, material_name: str, audio_bytes: bytes |
     st.session_state.update(material=material, transcript=transcript, transcript_source=source, concepts=concepts,
                             utterances=utts, scores=scores, run_id=rid, from_sample=from_sample, questions={},
                             answers={}, dont_know={}, mcq_choice={}, guessed={}, grading={}, priorities=None,
-                            explanations={}, diag_ids=[], q_mode_used=None)
+                            explanations={}, diag_ids=[], q_mode_used=None, notes={}, notes_failed=[],
+                            material_bytes=material_bytes if material.kind == "pdf" else None)
     if transcript and not utts:
         st.info("녹음에서 강조한 말을 찾지 못했어요. 자료만으로 점수를 계산했어요. (E-10)")
     return True
@@ -584,7 +593,7 @@ def screen_s03() -> None:
         with st.container(border=True):
             show(f'<div class="bt-qhead"><span class="bt-qno">Q{i}</span><span class="bt-name">{h(by_id[cid].name)}</span></div>'
                  f'<div>{badge(q.kind, "kind")}{badge(f"출제 {pct.get(cid, 0)}%", "none")}</div>'
-                 f'<div class="bt-q">{h(q.question)}</div>')
+                 f'<div class="bt-q">{h(q.question)}</div>{figure_html(q.figure)}')
             g = grading.get(cid)
             if g is not None:
                 _result_view(cid, q, g)
@@ -653,32 +662,76 @@ def _grade_all(ids: list[str]) -> None:
         st.session_state.grading[cid] = g
     add_usage(usage)
     st.session_state.priorities = compute_priorities(st.session_state.scores, st.session_state.grading)
+    st.session_state.update(explanations={}, notes={}, notes_failed=[])
     st.rerun()
 
 
 # ----------------------------------------------------------------- 화면 S04
 
 
-def _explain_many(ids: list[str]) -> None:
-    """보완 설명 생성. 세션 상태는 메인 스레드에서만 읽고 쓴다."""
+def _build_s04(explain_ids: list[str], note_ids: list[str]) -> list[str]:
+    """보완 설명(호출 4)과 요약 노트(호출 5)를 한꺼번에 만든다. 세션 상태는 메인 스레드에서만 읽고 쓴다.
+
+    보완 설명이 실패하면 LLMError를 그대로 올린다. 요약 노트는 실패한 개념 이름만 돌려준다(나머지는 보여 줌).
+    """
     material: Material = st.session_state.material
     meta = set(st.session_state.concepts.meta_pages)
     by_id = {c.id: c for c in st.session_state.concepts.concepts}
-    status = {p.concept_id: p.status for p in st.session_state.priorities}
+    prow = {p.concept_id: p for p in st.session_state.priorities}
+    status = {cid: p.status for cid, p in prow.items()}
     questions = dict(st.session_state.questions)
     answers = _answer_texts()
     grading = dict(st.session_state.grading)
+    utts = list(st.session_state.utterances or [])
     usage = Usage()
 
-    def one(cid: str) -> tuple[str, Explanation]:
-        return cid, explain(by_id[cid], material, meta, status.get(cid, STATUS_NOT_DIAGNOSED), questions.get(cid),
-                            answers.get(cid) if cid in grading else None, grading.get(cid), usage)
+    def one(job: tuple[str, str]):
+        kind, cid = job
+        if kind == "ex":
+            return job, explain(by_id[cid], material, meta, status.get(cid, STATUS_NOT_DIAGNOSED), questions.get(cid),
+                                answers.get(cid) if cid in grading else None, grading.get(cid), usage)
+        try:
+            return job, make_note_section(by_id[cid], material, meta, prow[cid], utts, grading.get(cid), usage)
+        except LLMError as e:
+            return job, e
 
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        results = list(ex.map(one, ids))
-    for cid, e in results:
-        st.session_state.explanations[cid] = e
+    jobs = [("ex", cid) for cid in explain_ids] + [("note", cid) for cid in note_ids]
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        results = list(ex.map(one, jobs))
+    failed = []
+    for (kind, cid), out in results:
+        if kind == "ex":
+            st.session_state.explanations[cid] = out
+        elif isinstance(out, Exception):
+            failed.append(cid)
+        else:
+            st.session_state.notes[cid] = out
+    st.session_state.notes_failed = sorted(set(st.session_state.notes_failed) | set(failed))
     add_usage(usage)
+    return failed
+
+
+def _explain_many(ids: list[str]) -> None:
+    _build_s04(ids, [])
+
+
+@st.cache_data(show_spinner=False, max_entries=400)
+def cached_page_image(rid: str, n: int, width: int, _data: bytes) -> bytes | None:
+    """강의자료 n쪽 그림. _data(파일 바이트)는 캐시 키에 넣지 않는다(rid가 파일 해시)."""
+    return render_page(_data, n, width, quality=80 if width >= PAGE_IMG_WIDTH else 70)
+
+
+def _page_expander(pages: list[int]) -> None:
+    """원본 페이지 그림(그림·표 포함)을 접어서 보여 준다. PDF일 때만."""
+    data = st.session_state.material_bytes
+    pages = list(dict.fromkeys(pages))[:2]
+    if not data or not pages:
+        return
+    with st.expander("🖼️ 강의자료 원본 보기 · " + ", ".join(f"p.{n}" for n in pages)):
+        for n in pages:
+            img = cached_page_image(st.session_state.run_id, n, PAGE_IMG_WIDTH, data)
+            if img:
+                st.image(img, caption=f"p.{n}", width="stretch")
 
 
 def _concept_block(rank: int, p: PriorityRow) -> None:
@@ -696,16 +749,81 @@ def _concept_block(rank: int, p: PriorityRow) -> None:
                     show_error(error_message(err), str(err))
             return
         show(explanation_html(e))
+        _page_expander(e.check_pages)
 
 
-def _download(key: str) -> None:
+def _note_block(c: Concept, p: PriorityRow, sec: NoteSection | None) -> None:
+    detail = sec.detail if sec is not None else note_detail(p)
+    with st.container(border=True):
+        show(f'<div class="bt-qhead"><span class="bt-name">{h(c.name)}</span></div>'
+             f"<div>{badge(detail, 'kind')}{badge(p.action, 'none')}{badge(f'출제 {p.exam_pct}%', 'none')}"
+             f"{status_badge(p.status)}</div>")
+        if sec is None:
+            st.caption("이 개념의 요약을 만들지 못했어요. 아래 '요약 노트 다시 만들기'를 눌러 주세요.")
+            return
+        parts = [f'<div class="bt-ex">{paragraphs(sec.summary)}</div>']
+        if sec.key_points:
+            parts.append('<span class="bt-lbl">핵심</span><ul>' + "".join(f"<li>{page_chips(h(k))}</li>"
+                                                                       for k in sec.key_points) + "</ul>")
+        if sec.pitfalls:
+            parts.append('<span class="bt-lbl">자주 하는 실수</span><ul>' + "".join(f"<li>{page_chips(h(k))}</li>"
+                                                                              for k in sec.pitfalls) + "</ul>")
+        for u in professor_quotes(c.id, st.session_state.utterances or []):
+            parts.append(f'<div class="bt-quote">🎙️ 교수님 · {h(UTTERANCE_LABELS.get(u.type, u.type))}: “{h(u.quote)}”</div>')
+        if sec.source_pages:
+            parts.append(f'<div class="bt-pages">📖 근거 페이지: {h(", ".join(f"p.{n}" for n in sec.source_pages))}</div>')
+        show('<div class="bt-note">' + "".join(parts) + "</div>")
+        if detail != DETAIL_SHORT:
+            _page_expander(sec.source_pages)
+
+
+def _note_view(pri: list[PriorityRow]) -> None:
+    concepts: list[Concept] = st.session_state.concepts.concepts
+    meta = set(st.session_state.concepts.meta_pages)
+    prow = {p.concept_id: p for p in pri}
+    notes: dict[str, NoteSection] = st.session_state.notes
+    n_full = sum(1 for p in pri if note_detail(p) == DETAIL_FULL)
+    n_mid = sum(1 for p in pri if note_detail(p) == DETAIL_MID)
+    st.caption(f"강의 순서대로 모든 개념을 정리했어요. 중요한 개념일수록 자세히 썼어요 "
+               f"(자세히 {n_full} · 보통 {n_mid} · 짧게 {len(pri) - n_full - n_mid}). "
+               "'자세히'는 지금 당장 볼 개념, 출제 가능성이 높은 개념, 진단에서 틀린 개념이에요.")
+    for c in lecture_order(concepts, meta):
+        if c.id in prow:
+            _note_block(c, prow[c.id], notes.get(c.id))
+    if st.session_state.notes_failed:
+        if st.button("요약 노트 다시 만들기", key="notes_retry"):
+            st.session_state.notes_failed = []
+            st.rerun()
+
+
+def _export_doc() -> str:
     s = st.session_state
-    doc = to_html(s.material.name, s.scores, s.grading, s.priorities, s.explanations,
-                  transcript_used=bool(s.transcript), questions=s.questions, answer_texts=_answer_texts(),
-                  choices={cid: (c if c is not None and c >= 0 else None) for cid, c in s.mcq_choice.items()})
+    meta = set(s.concepts.meta_pages)
+    order = [c.id for c in lecture_order(s.concepts.concepts, meta)]
+    utts = s.utterances or []
+    quotes = {cid: [(UTTERANCE_LABELS.get(u.type, u.type), u.quote) for u in professor_quotes(cid, utts)] for cid in order}
+    wanted: set[int] = set()
+    for e in s.explanations.values():
+        wanted |= set(e.check_pages[:2])
+    for sec in s.notes.values():
+        if sec.detail != DETAIL_SHORT:
+            wanted |= set(sec.source_pages[:2])
+    images: dict[int, str] = {}
+    if s.material_bytes:
+        for n in sorted(wanted):
+            img = cached_page_image(s.run_id, n, EXPORT_IMG_WIDTH, s.material_bytes)
+            if img:
+                images[n] = data_uri(img)
+    return to_html(s.material.name, s.scores, s.grading, s.priorities, s.explanations,
+                   transcript_used=bool(s.transcript), questions=s.questions, answer_texts=_answer_texts(),
+                   choices={cid: (c if c is not None and c >= 0 else None) for cid, c in s.mcq_choice.items()},
+                   notes=s.notes, note_order=order, quotes=quotes, page_images=images)
+
+
+def _download(key: str, doc: str) -> None:
     st.download_button("📥 결과 내려받기 (HTML)", data=doc.encode("utf-8"), key=key, type="primary", width="stretch",
                        file_name=f"빈틈노트_결과_{date.today().isoformat()}.html", mime="text/html",
-                       help="파일을 열면 브라우저에서 바로 보여요. 인터넷 없이도 열려요.")
+                       help="요약 노트와 강의자료 페이지 그림까지 파일 하나에 들어 있어요. 인터넷 없이도 열려요.")
 
 
 def screen_s04() -> None:
@@ -717,57 +835,73 @@ def screen_s04() -> None:
     count = {t: sum(1 for p in pri if p.action == t) for t, _ in TIERS}
     show(tiles([("지금 당장", count["지금 당장"], "red"), ("다음", count["다음"], "amber"),
                 ("복습만", count["복습만"], "green")]))
-    _download("dl_top")
 
-    # 자동 설명: '지금 당장' 전부 + 상위 N개. 나머지는 버튼으로 (비용 절약)
+    # 자동으로 만드는 것: 보완 설명('지금 당장' 전부 + 상위 N개)과 요약 노트('자세히'·'보통'). '짧게'는 AI 호출 없음.
+    by_id = {c.id: c for c in st.session_state.concepts.concepts}
+    meta = set(st.session_state.concepts.meta_pages)
+    for p in pri:
+        if note_detail(p) == DETAIL_SHORT and p.concept_id not in st.session_state.notes and p.concept_id in by_id:
+            st.session_state.notes[p.concept_id] = short_section(by_id[p.concept_id], meta)
     want = {p.concept_id for p in pri[:AUTO_EXPLAIN_TOP]} | {p.concept_id for p in pri if p.action == "지금 당장"}
     auto = [p.concept_id for p in pri if p.concept_id in want and p.concept_id not in st.session_state.explanations]
-    if auto:
+    note_ids = [p.concept_id for p in pri if p.concept_id not in st.session_state.notes and p.concept_id in by_id
+                and p.concept_id not in st.session_state.notes_failed]
+    if auto or note_ids:
         try:
-            with st.spinner(f"보완 설명 {len(auto)}개 만드는 중…"):
-                _explain_many(auto)
+            what = [f"보완 설명 {len(auto)}개" if auto else "", f"요약 노트 {len(note_ids)}개" if note_ids else ""]
+            with st.spinner(" · ".join(w for w in what if w) + " 만드는 중…"):
+                failed = _build_s04(auto, note_ids)
+            if failed:
+                st.warning(f"요약 노트 {len(failed)}개를 만들지 못했어요. 요약 노트 탭 아래의 '다시 만들기'를 눌러 주세요. (E-07)")
         except LLMError as e:
             show_error(error_message(e), str(e))
 
-    for tier, note in TIERS:
-        rows = [p for p in pri if p.action == tier]
-        if not rows:
-            continue
-        show(f'<div class="bt-tier">{h(tier)} · {len(rows)}개<small>{h(note)}</small></div>')
-        if tier == "복습만":
-            with st.expander(f"복습만 {len(rows)}개 펼치기"):
-                st.caption(f"'진단 안 함'은 출제 가능성이 {DIAG_MIN_PCT}% 미만이라 문제를 내지 않은 개념이에요.")
+    doc = _export_doc()
+    _download("dl_top", doc)
+
+    tab_plan, tab_note = st.tabs(["🎯 공부 순서와 보완 설명", "📒 시험 대비 요약 노트"], key="s04_tabs")
+    with tab_plan:
+        for tier, note in TIERS:
+            rows = [p for p in pri if p.action == tier]
+            if not rows:
+                continue
+            show(f'<div class="bt-tier">{h(tier)} · {len(rows)}개<small>{h(note)}</small></div>')
+            if tier == "복습만":
+                with st.expander(f"복습만 {len(rows)}개 펼치기"):
+                    st.caption(f"'진단 안 함'은 출제 가능성이 {DIAG_MIN_PCT}% 미만이라 문제를 내지 않은 개념이에요.")
+                    for p in rows:
+                        _concept_block(rank[p.concept_id], p)
+            else:
+                missing = [p.concept_id for p in rows if p.concept_id not in st.session_state.explanations]
+                if tier == "다음" and len(missing) > 1:
+                    if st.button(f"'다음' 개념 설명 {len(missing)}개 한 번에 보기", key="ex_all_next"):
+                        try:
+                            with st.spinner(f"보완 설명 {len(missing)}개 만드는 중…"):
+                                _explain_many(missing)
+                            st.rerun()
+                        except LLMError as err:
+                            show_error(error_message(err), str(err))
                 for p in rows:
                     _concept_block(rank[p.concept_id], p)
-        else:
-            missing = [p.concept_id for p in rows if p.concept_id not in st.session_state.explanations]
-            if tier == "다음" and len(missing) > 1:
-                if st.button(f"'다음' 개념 설명 {len(missing)}개 한 번에 보기", key="ex_all_next"):
-                    try:
-                        with st.spinner(f"보완 설명 {len(missing)}개 만드는 중…"):
-                            _explain_many(missing)
-                        st.rerun()
-                    except LLMError as err:
-                        show_error(error_message(err), str(err))
-            for p in rows:
-                _concept_block(rank[p.concept_id], p)
 
-    with st.expander("전체 표로 보기"):
-        st.dataframe(
-            [{"순위": rank[p.concept_id], "개념": p.name, "출제 가능성": p.exam_pct, "이해 상태": p.status,
-              "우선순위 점수": p.priority, "권장": p.action} for p in pri],
-            hide_index=True, width="stretch",
-            column_config={
-                "출제 가능성": st.column_config.ProgressColumn(format="%d%%", min_value=0, max_value=100),
-                "우선순위 점수": st.column_config.ProgressColumn(format="%d", min_value=0, max_value=100),
-            })
-        st.caption("우선순위 점수 = 출제 가능성 × (1 − 이해도). 이해도: 앎 1.0 · 헷갈림 0.5 · 모름 0.0 · 진단 안 함 0.5. "
-                   "50 이상 지금 당장, 20~49 다음, 20 미만 복습만.")
+        with st.expander("전체 표로 보기"):
+            st.dataframe(
+                [{"순위": rank[p.concept_id], "개념": p.name, "출제 가능성": p.exam_pct, "이해 상태": p.status,
+                  "우선순위 점수": p.priority, "권장": p.action} for p in pri],
+                hide_index=True, width="stretch",
+                column_config={
+                    "출제 가능성": st.column_config.ProgressColumn(format="%d%%", min_value=0, max_value=100),
+                    "우선순위 점수": st.column_config.ProgressColumn(format="%d", min_value=0, max_value=100),
+                })
+            st.caption("우선순위 점수 = 출제 가능성 × (1 − 이해도). 이해도: 앎 1.0 · 헷갈림 0.5 · 모름 0.0 · 진단 안 함 0.5. "
+                       "50 이상 지금 당장, 20~49 다음, 20 미만 복습만.")
+    with tab_note:
+        _note_view(pri)
 
     st.divider()
     c1, c2 = st.columns(2)
     with c1:
-        _download("dl_bottom")
+        _download("dl_bottom", doc)
     with c2:
         if st.button("다른 자료로 다시", width="stretch"):
             reset_state()
@@ -785,7 +919,7 @@ def screen_s05() -> None:
 1. 강의자료(PDF/PPTX)와 녹음(또는 대본)을 올리고 **분석 시작**
 2. ② 출제 포인트 순위와 근거를 확인
 3. ③ 출제 가능성 {DIAG_MIN_PCT}% 이상인 개념을 전부 객관식·서술형 문제로 진단
-4. ④ 공부 순서와 자료 근거 보완 설명을 보고, 결과를 HTML 파일로 저장
+4. ④ 공부 순서와 자료 근거 보완 설명(오답노트), 강의 순서대로 정리한 **시험 대비 요약 노트**를 보고, 결과를 HTML 파일로 저장
 
 **주의**
 - 출제를 보장하지 않습니다. 공부 우선순위를 정하는 참고용입니다.

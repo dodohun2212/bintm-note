@@ -1,4 +1,4 @@
-# T-16 내보내기(HTML), T-17 전체 흐름 (BINTM_FAKE_AI=1 로 저장된 결과 사용)
+# T-16 내보내기(HTML), T-17 전체 흐름(요약 노트 포함) (BINTM_FAKE_AI=1 로 저장된 결과 사용)
 import os
 from pathlib import Path
 
@@ -10,6 +10,7 @@ from core.explain import explain
 from core.export import NOTICE, to_html
 from core.extract import extract_material
 from core.llm import Usage
+from core.note import lecture_order, make_note_section, note_detail
 from core.priority import compute_priorities
 from core.schemas import QTYPE_ESSAY, QTYPE_MCQ
 from core.score import compute_scores
@@ -65,10 +66,20 @@ def test_t17_full_flow_without_real_ai():
         exps[c.id] = explain(c, material, meta, p.status, questions.get(c.id), answers.get(c.id), grading.get(c.id), usage)
     assert all(e.source_pages for e in exps.values())
 
+    # 시험 대비 요약 노트: 모든 개념, '짧게'는 AI 호출 없음, 강의 순서
+    prow = {p.concept_id: p for p in priorities}
+    notes = {c.id: make_note_section(c, material, meta, prow[c.id], utts, grading.get(c.id), usage)
+             for c in concepts.concepts}
+    n_ai = sum(1 for n in notes.values() if n.from_ai)
+    assert 0 < n_ai < len(notes)
+    assert all(n.detail == note_detail(prow[cid]) for cid, n in notes.items())
+    order = [c.id for c in lecture_order(concepts.concepts, meta)]
+    assert order[0] == "c1" and len(order) == len(concepts.concepts)
+
     doc = to_html(material.name, scores, grading, priorities, exps, transcript_used=True, questions=questions,
-                  answer_texts=answers, choices={mcqs[0]: (q.answer_index + 1) % 4})
+                  answer_texts=answers, choices={mcqs[0]: (q.answer_index + 1) % 4}, notes=notes, note_order=order)
     assert doc.startswith("<!doctype html>") and doc.rstrip().endswith("</html>")
-    assert doc.count("<h2>") == 4 and NOTICE in doc
+    assert doc.count("<h2>") == 5 and NOTICE in doc and "시험 대비 요약 노트" in doc
     assert "객관식" in doc and "서술형" in doc and "내 답" in doc
     assert 'class="pg"' in doc  # (p.n) 인용이 페이지 배지로
 

@@ -7,6 +7,7 @@ from typing import Optional
 
 from core import prompts
 from core.diagnose import CIRCLED
+from core.figure import figure_text
 from core.extract import evidence_pages, pages_to_text
 from core.llm import Usage, ask_json
 from core.schemas import STATUS_NOT_DIAGNOSED, Concept, Explanation, Grading, Material, Question
@@ -17,6 +18,8 @@ def _diagnosis_json(status: str, question: Optional[Question], answer: Optional[
     if question is not None:
         d["question_type"] = question.kind
         d["question"] = question.question
+        if question.figure is not None:
+            d["figure"] = figure_text(question.figure)
         if question.is_mcq:
             d["choices"] = [f"{CIRCLED[i]} {c}" for i, c in enumerate(question.choices)]
             d["model_answer"] = f"{CIRCLED[question.answer_index or 0]} {question.answer}"

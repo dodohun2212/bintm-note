@@ -11,6 +11,7 @@ from typing import Optional, Sequence
 from config import DIAG_MIN_PCT, ESSAY_MIN_PCT
 from core import prompts
 from core.extract import evidence_pages, pages_to_text
+from core.figure import check_figure, figure_problem, figure_text
 from core.llm import LLMJsonError, Usage, ask_json
 from core.schemas import (QTYPE_ESSAY, QTYPE_MCQ, STATUS_KNOWN, STATUS_UNKNOWN, STATUS_UNSURE, Concept, Grading,
                           Material, Question, RubricItem, ScoresResult)
@@ -25,6 +26,14 @@ MCQ_DONT_KNOW = -1                # 객관식 "모르겠어요"를 고른 값 (�
 REASON_BLANK = "답을 비워 두어 모름으로 표시했어요."
 REASON_DONT_KNOW = "'모르겠어요'를 골라 모름으로 표시했어요."
 REASON_NOT_PICKED = "보기를 고르지 않아 모름으로 표시했어요."
+
+
+# 문제가 학생이 볼 수 없는 페이지·그림을 가리키면 이 말을 붙여 한 번 더 만든다 (F08)
+FIX_NOTE = (
+    "\n\n## 다시 만들기\n방금 만든 문제는 {why}. 학생은 강의자료를 펴지 않고 이 문제 화면만 봅니다. "
+    "문제 글에 페이지 번호나 '그림 참고' 같은 말을 쓰지 말고, 트리·배열·표가 필요하면 `figure`에 데이터로 넣으세요. "
+    "같은 출력 형식의 JSON으로 다시 만드세요."
+)
 
 
 # 문제 형식 고르기 (S02)
@@ -99,10 +108,20 @@ def make_question(concept: Concept, material: Material, meta_pages: set[int], us
     pages = evidence_pages(concept.pages, meta_pages)
     prompt = prompts.fill("03A", CONCEPT_NAME=concept.name, PAGES=pages_to_text(material, pages),
                           OTHER_CONCEPTS=other_concepts_text(others))
-    raw = ask_json(prompt, name="03A", max_tokens=2000, usage=usage)
-    q = Question.model_validate(raw)
-    src = [p for p in q.source_pages if p in pages] or pages[:2]
-    return q.model_copy(update={"rubric": _normalize_rubric(q.rubric), "source_pages": src, "kind": QTYPE_ESSAY})
+
+    def parse(raw: dict) -> Question:
+        raw = dict(raw)
+        fig = check_figure(raw.pop("figure", None))
+        q = Question.model_validate(raw)
+        src = [p for p in q.source_pages if p in pages] or pages[:2]
+        return q.model_copy(update={"rubric": _normalize_rubric(q.rubric), "source_pages": src, "kind": QTYPE_ESSAY,
+                                    "figure": fig})
+
+    q = parse(ask_json(prompt, name="03A", max_tokens=2000, usage=usage))
+    why = figure_problem(q.question, q.figure)
+    if why:   # 한 번 더 만든다. 그래도 안 되면 두 번째 문제를 쓴다.
+        q = parse(ask_json(prompt + FIX_NOTE.format(why=why), name="03A", max_tokens=2000, usage=usage))
+    return q
 
 
 _CHOICE_PREFIX = re.compile(r"^\s*(?:[①②③④⑤]\s*|(?:[1-5A-Ea-e][.)]|\([1-5A-Ea-e]\))\s+)")
@@ -139,15 +158,25 @@ def shuffle_choices(choices: list[str], answer_index: int, seed: str) -> tuple[l
 
 def make_mcq(concept: Concept, material: Material, meta_pages: set[int], usage: Optional[Usage] = None,
              others: Sequence[str] = ()) -> Question:
+    """그림 검사에 두 번 걸리면 ValueError (make_question이 서술형으로 대신 만든다)."""
     pages = evidence_pages(concept.pages, meta_pages)
     prompt = prompts.fill("03C", CONCEPT_NAME=concept.name, PAGES=pages_to_text(material, pages),
                           OTHER_CONCEPTS=other_concepts_text(others))
     raw = ask_json(prompt, name="03C", max_tokens=2000, usage=usage)
     question, choices, idx, explanation, src = check_mcq(raw)
+    fig = check_figure(raw.get("figure"))
+    why = figure_problem(question, fig)
+    if why:
+        raw = ask_json(prompt + FIX_NOTE.format(why=why), name="03C", max_tokens=2000, usage=usage)
+        question, choices, idx, explanation, src = check_mcq(raw)
+        fig = check_figure(raw.get("figure"))
+        why = figure_problem(question, fig)
+        if why:
+            raise ValueError(f"그림 검사 실패: {why}")
     choices, idx = shuffle_choices(choices, idx, concept.id + question)
     src = [p for p in src if p in pages] or pages[:2]
     return Question(question=question, answer=choices[idx], rubric=[], source_pages=src, kind=QTYPE_MCQ,
-                    choices=choices, answer_index=idx, explanation=explanation)
+                    choices=choices, answer_index=idx, explanation=explanation, figure=fig)
 
 
 CIRCLED = "①②③④⑤⑥⑦⑧"
@@ -179,6 +208,14 @@ def empty_grading(reason: str = REASON_BLANK) -> Grading:
     return Grading(score=0, max=10, rubric_scores=[], status=STATUS_UNKNOWN, error_type="무응답", reason=reason)
 
 
+def question_for_prompt(question: Question) -> dict:
+    """채점·설명 프롬프트에 넣을 문제. 그림은 글로 바꿔 넣는다."""
+    d = question.model_dump(exclude={"figure"})
+    if question.figure is not None:
+        d["figure"] = figure_text(question.figure)
+    return d
+
+
 def grade_answer(concept: Concept, question: Question, answer: str, material: Material, meta_pages: set[int],
                  usage: Optional[Usage] = None) -> Grading:
     """빈 답은 AI 호출 없이 0점 (E-11). 상태는 코드가 점수로 정한다."""
@@ -188,7 +225,7 @@ def grade_answer(concept: Concept, question: Question, answer: str, material: Ma
     prompt = prompts.fill(
         "03B",
         CONCEPT_NAME=concept.name,
-        QUESTION_JSON=json.dumps(question.model_dump(), ensure_ascii=False, indent=1),
+        QUESTION_JSON=json.dumps(question_for_prompt(question), ensure_ascii=False, indent=1),
         PAGES=pages_to_text(material, pages),
         ANSWER=answer.strip(),
     )

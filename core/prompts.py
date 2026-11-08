@@ -16,6 +16,7 @@ PROMPT_FILES = {
     "03B": "03B_채점_v1.md",
     "03C": "03C_객관식_v1.md",
     "04": "04_보완설명_v1.md",
+    "05": "05_요약노트_v1.md",
 }
 
 _PLACEHOLDER = re.compile(r"\{\{([A-Z_]+)\}\}")

@@ -11,8 +11,9 @@ from datetime import date
 from typing import Optional
 
 from core.diagnose import CIRCLED
-from core.schemas import (STATUS_KNOWN, STATUS_NOT_DIAGNOSED, STATUS_UNKNOWN, STATUS_UNSURE, Explanation, Grading,
-                          PriorityRow, Question, ScoresResult)
+from core.figure import FIGURE_CSS, figure_html
+from core.schemas import (DETAIL_FULL, DETAIL_MID, STATUS_KNOWN, STATUS_NOT_DIAGNOSED, STATUS_UNKNOWN, STATUS_UNSURE,
+                          Explanation, Grading, NoteSection, PriorityRow, Question, ScoresResult)
 
 NOTICE = "이 결과는 자료와 녹음의 신호를 규칙대로 더한 것으로, 실제 출제를 보장하지 않습니다."
 TIERS = ("지금 당장", "다음", "복습만")
@@ -83,6 +84,15 @@ th{font-size:13px;color:var(--sub);font-weight:600;background:var(--none-bg)}
 td.num{text-align:right;white-space:nowrap}
 .chips{display:flex;flex-wrap:wrap;gap:4px}
 .chip{font-size:12.5px;background:var(--none-bg);border-radius:6px;padding:1px 7px}
+.note h3 small{font-weight:400;color:var(--sub);font-size:14px;margin-left:6px}
+.note ul{margin:4px 0 10px;padding-left:20px}
+.note.short p{margin:0 0 6px}
+.quote{font-size:14px;color:var(--sub);margin:2px 0}
+a.pg{text-decoration:none}
+.pgimg{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px;margin:12px 0;
+page-break-inside:avoid}
+.pgimg img{display:block;width:100%;height:auto;border-radius:6px}
+.pgimg b{display:block;font-size:14px;margin:0 0 6px}
 footer{margin-top:40px;color:var(--sub);font-size:13px;border-top:1px solid var(--line);padding-top:12px}
 @media (max-width:560px){.tiles{grid-template-columns:1fr 1fr 1fr}.tile b{font-size:22px}h1{font-size:24px}
 .row{grid-template-columns:28px 1fr}.row .right-col{grid-column:2}}
@@ -111,6 +121,12 @@ def _pages(pages: list[int]) -> str:
     return ", ".join(f"p.{p}" for p in pages)
 
 
+def _page_links(pages: list[int], images: dict[int, str]) -> str:
+    """그림이 들어 있는 쪽은 맨 아래 '강의자료 페이지'로 가는 링크로."""
+    return " ".join(f'<a class="pg" href="#pg-{n}">p.{n}</a>' if n in images else f'<span class="pg">p.{n}</span>'
+                    for n in pages)
+
+
 def _priority_section(priorities: list[PriorityRow]) -> str:
     out = []
     rank = {p.concept_id: i for i, p in enumerate(priorities, start=1)}
@@ -132,7 +148,7 @@ def _priority_section(priorities: list[PriorityRow]) -> str:
     return "\n".join(out)
 
 
-def _explanation_card(p: PriorityRow, e: Explanation) -> str:
+def _explanation_card(p: PriorityRow, e: Explanation, images: Optional[dict[int, str]] = None) -> str:
     out = [f'<div class="card"><h3>{_e(p.name)}</h3>',
            f'<div class="badges">{_status_badge(p.status)}<span class="badge none">출제 {p.exam_pct}%</span>'
            f'<span class="badge kind">{_e(p.action)}</span></div>']
@@ -143,7 +159,27 @@ def _explanation_card(p: PriorityRow, e: Explanation) -> str:
         out.append(f'<div class="warn">올린 자료에서 찾지 못함 · {_e(e.not_found_note or "")} '
                    '교재 다른 장이나 수업 노트를 확인하세요.</div>')
     if e.check_pages:
-        out.append(f'<div class="pages">다시 볼 페이지: {_e(_pages(e.check_pages))}</div>')
+        out.append(f'<div class="pages">다시 볼 페이지: {_page_links(e.check_pages, images or {})}</div>')
+    out.append("</div>")
+    return "".join(out)
+
+
+def _note_card(p: PriorityRow, sec: NoteSection, quotes: list[tuple[str, str]], images: dict[int, str]) -> str:
+    short = sec.detail not in (DETAIL_FULL, DETAIL_MID)
+    out = [f'<div class="card note{" short" if short else ""}"><h3>{_e(p.name)}<small>{_e(sec.detail)}</small></h3>',
+           f'<div class="badges"><span class="badge kind">{_e(p.action)}</span>'
+           f'<span class="badge none">출제 {p.exam_pct}%</span>{_status_badge(p.status)}</div>',
+           _paragraphs(sec.summary)]
+    if sec.key_points:
+        out.append('<span class="lbl">핵심</span><ul>' + "".join(f"<li>{_with_page_chips(_e(k))}</li>"
+                                                              for k in sec.key_points) + "</ul>")
+    if sec.pitfalls:
+        out.append('<span class="lbl">자주 하는 실수</span><ul>' + "".join(f"<li>{_with_page_chips(_e(k))}</li>"
+                                                                     for k in sec.pitfalls) + "</ul>")
+    for label, quote in quotes:
+        out.append(f'<p class="quote">교수님 · {_e(label)}: “{_e(quote)}”</p>')
+    if sec.source_pages:
+        out.append(f'<div class="pages">근거 페이지: {_page_links(sec.source_pages, images)}</div>')
     out.append("</div>")
     return "".join(out)
 
@@ -156,6 +192,7 @@ def _diagnosis_card(name: str, q: Optional[Question], answer_text: str, g: Gradi
            + (f'<span class="badge none">{_e(g.error_type)}</span>' if g.error_type else "") + "</div>"]
     if q is not None:
         out.append(f'<p class="q">{_e(q.question)}</p>')
+        out.append(figure_html(q.figure))
         if q.is_mcq:
             items = []
             for i, c in enumerate(q.choices):
@@ -183,12 +220,22 @@ def _diagnosis_card(name: str, q: Optional[Question], answer_text: str, g: Gradi
 def to_html(material_name: str, scores: ScoresResult, grading: dict[str, Grading], priorities: list[PriorityRow],
             explanations: dict[str, Explanation], transcript_used: bool,
             questions: Optional[dict[str, Question]] = None, answer_texts: Optional[dict[str, str]] = None,
-            choices: Optional[dict[str, Optional[int]]] = None, today: Optional[date] = None) -> str:
-    """세션 결과를 HTML 문서 하나로. questions/answer_texts/choices가 없으면 진단 카드에 문제를 빼고 보여준다."""
+            choices: Optional[dict[str, Optional[int]]] = None, today: Optional[date] = None,
+            notes: Optional[dict[str, NoteSection]] = None, note_order: Optional[list[str]] = None,
+            quotes: Optional[dict[str, list[tuple[str, str]]]] = None,
+            page_images: Optional[dict[int, str]] = None) -> str:
+    """세션 결과를 HTML 문서 하나로. questions/answer_texts/choices가 없으면 진단 카드에 문제를 빼고 보여준다.
+
+    notes: 시험 대비 요약 노트(개념 id → 절), note_order: 강의 순서, quotes: 개념별 교수님 말 (유형, 인용),
+    page_images: 쪽 번호 → 그림 data URI. 그림은 맨 아래에 한 번씩만 넣고 카드에서는 링크로 가리킨다.
+    """
     today = today or date.today()
     questions = questions or {}
     answer_texts = answer_texts or {}
     choices = choices or {}
+    notes = notes or {}
+    quotes = quotes or {}
+    images = page_images or {}
     names = {s.concept_id: s.name for s in scores.scores}
     tier_count = {t: sum(1 for p in priorities if p.action == t) for t in TIERS}
     title = f"빈틈노트 결과 · {material_name}"
@@ -205,14 +252,23 @@ def to_html(material_name: str, scores: ScoresResult, grading: dict[str, Grading
     body.append("<h2>1. 공부 순서</h2>")
     body.append(_priority_section(priorities) if priorities else "<p>우선순위 없음</p>")
 
-    body.append("<h2>2. 보완 설명</h2>")
+    body.append("<h2>2. 보완 설명 (오답노트)</h2>")
     shown = [p for p in priorities if p.concept_id in explanations]
     if shown:
-        body.extend(_explanation_card(p, explanations[p.concept_id]) for p in shown)
+        body.extend(_explanation_card(p, explanations[p.concept_id], images) for p in shown)
     else:
         body.append("<p>생성된 설명 없음</p>")
 
-    body.append("<h2>3. 진단 결과</h2>")
+    body.append("<h2>3. 시험 대비 요약 노트</h2>")
+    by_pid = {p.concept_id: p for p in priorities}
+    order = [cid for cid in (note_order or list(notes)) if cid in notes and cid in by_pid]
+    if order:
+        body.append('<p class="small">강의 순서대로 정리했어요. 공부 순서가 앞인 개념일수록 자세히 썼어요.</p>')
+        body.extend(_note_card(by_pid[cid], notes[cid], quotes.get(cid, []), images) for cid in order)
+    else:
+        body.append("<p>요약 노트 없음</p>")
+
+    body.append("<h2>4. 진단 결과</h2>")
     if grading:
         g_counts = {s: sum(1 for g in grading.values() if g.status == s) for s in (STATUS_KNOWN, STATUS_UNSURE, STATUS_UNKNOWN)}
         body.append('<p class="small">' + " · ".join(f"{k} {v}" for k, v in g_counts.items()) + "</p>")
@@ -223,7 +279,7 @@ def to_html(material_name: str, scores: ScoresResult, grading: dict[str, Grading
     else:
         body.append("<p>진단하지 않음</p>")
 
-    body.append("<h2>4. 출제 포인트 순위</h2>")
+    body.append("<h2>5. 출제 포인트 순위</h2>")
     if scores.scores:
         trs = []
         for i, s in enumerate(scores.scores, start=1):
@@ -235,8 +291,14 @@ def to_html(material_name: str, scores: ScoresResult, grading: dict[str, Grading
     else:
         body.append("<p>개념 없음</p>")
 
+    if images:
+        body.append("<h2>6. 강의자료 페이지</h2>")
+        body.append('<p class="small">위 설명과 요약 노트에서 가리킨 페이지예요. 그림과 표를 원본 그대로 볼 수 있어요.</p>')
+        for n in sorted(images):
+            body.append(f'<div class="pgimg" id="pg-{n}"><b>p.{n}</b><img src="{images[n]}" alt="강의자료 {n}쪽"></div>')
+
     body.append(f"<footer>{_e(NOTICE)}<br>빈틈노트 · KOREATECH Build for Students</footer>")
     return ("<!doctype html>\n<html lang=\"ko\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-            f"<title>{_e(title)}</title><style>{_CSS}</style></head>\n<body><main>\n"
+            f"<title>{_e(title)}</title><style>{_CSS}{FIGURE_CSS}</style></head>\n<body><main>\n"
             + "\n".join(body) + "\n</main></body></html>\n")

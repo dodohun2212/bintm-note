@@ -44,6 +44,19 @@ def respond(name: str, prompt_text: str) -> dict:
     if name == "03A":
         concept = _concept_name(prompt_text)
         pages = _pages_in(_between(prompt_text, "pages"))[:2]
+        if "순회" in concept:   # 그림(트리)이 붙는 문제 예
+            return {
+                "question": "(가짜 AI 모드) 아래 트리를 전위·중위·후위로 순회한 결과를 각각 쓰고, 세 순회가 무엇이 다른지 설명하시오.",
+                "answer": "(가짜 AI 모드) 전위는 + * a b - c d, 중위는 a * b + c - d, 후위는 a b * c d - +이다. 루트를 방문하는 시점이 다르다.",
+                "rubric": [
+                    {"point": "전위 순회 결과", "score": 3},
+                    {"point": "중위 순회 결과", "score": 3},
+                    {"point": "후위 순회 결과", "score": 2},
+                    {"point": "루트 방문 시점 차이", "score": 2},
+                ],
+                "source_pages": pages or [1],
+                "figure": {"kind": "tree", "nodes": ["+", "*", "-", "a", "b", "c", "d"], "caption": "수식 트리"},
+            }
         return {
             "question": f"'{concept}'의 핵심 내용을 자료에 나온 대로 설명하고, 그 과정이나 성질이 왜 그렇게 되는지 이유를 쓰시오.",
             "answer": f"(가짜 AI 모드) {concept}에 대한 자료의 설명을 요약한 모범 답안.",
@@ -58,6 +71,16 @@ def respond(name: str, prompt_text: str) -> dict:
     if name == "03C":
         concept = _concept_name(prompt_text)
         pages = _pages_in(_between(prompt_text, "pages"))[:2]
+        if "배열" in concept:   # 그림(배열)이 붙는 문제 예
+            return {
+                "question": "(가짜 AI 모드) 아래 배열로 저장한 완전 이진 트리에서 값 75인 노드의 왼쪽 자식은?",
+                "choices": ["30", "60", "80", "40"],
+                "answer_index": 0,
+                "explanation": "(가짜 AI 모드) 75는 인덱스 2이고 왼쪽 자식은 2i = 4번, 값 30이다 (p.7).",
+                "source_pages": pages or [1],
+                "figure": {"kind": "array", "items": ["90", "75", "80", "30", "60", "40"], "start": 1,
+                           "caption": "인덱스 1부터 저장"},
+            }
         return {
             "question": f"(가짜 AI 모드) '{concept}'에 대한 설명으로 옳은 것은?",
             "choices": [
@@ -92,5 +115,20 @@ def respond(name: str, prompt_text: str) -> dict:
             "source_pages": pages or [1],
             "not_found": False,
             "not_found_note": None,
+        }
+    if name == "05":
+        concept = _concept_name(prompt_text)
+        pages = _pages_in(_between(prompt_text, "pages"))[:2]
+        p = pages[0] if pages else 1
+        full = "**자세히**" in prompt_text
+        summary = (f"(가짜 AI 모드) 실제 AI를 켜면 {concept}의 정의를 자료 문장으로 정리한 요약이 나온다 (p.{p}).")
+        if full:
+            summary += (f"\n\n(가짜 AI 모드) 절차와 과정을 순서대로 짚는다 (p.{p})."
+                        f"\n\n(가짜 AI 모드) 왜 그런지와 시간 복잡도를 정리한다 (p.{p}).")
+        return {
+            "summary": summary,
+            "key_points": [f"(가짜) {concept} 핵심 1", f"(가짜) {concept} 핵심 2"] + ([f"(가짜) {concept} 핵심 3"] if full else []),
+            "pitfalls": [f"(가짜) {concept}에서 자주 하는 실수"] if full else [],
+            "source_pages": pages or [1],
         }
     raise KeyError(name)

@@ -112,6 +112,22 @@ class RubricItem(BaseModel):
 QTYPE_ESSAY = "서술형"
 QTYPE_MCQ = "객관식"
 
+FIG_TREE = "tree"     # 이진 트리. nodes = 레벨 순서(배열 표현) 노드 값, 빈자리는 null
+FIG_ARRAY = "array"   # 배열. items = 값, start = 첫 인덱스(0 또는 1)
+FIG_TABLE = "table"   # 표. header = 열 이름, rows = 행
+FIGURE_KINDS = (FIG_TREE, FIG_ARRAY, FIG_TABLE)
+
+
+class Figure(BaseModel):
+    """문제에 붙는 그림. AI는 데이터만 주고 그림은 코드가 그린다 (core/figure.py)."""
+    kind: str
+    caption: str = ""
+    nodes: list[Optional[str]] = Field(default_factory=list)
+    items: list[str] = Field(default_factory=list)
+    start: int = 0
+    header: list[str] = Field(default_factory=list)
+    rows: list[list[str]] = Field(default_factory=list)
+
 
 class Question(BaseModel):
     question: str
@@ -122,6 +138,7 @@ class Question(BaseModel):
     choices: list[str] = Field(default_factory=list)        # 객관식 보기 4개 (섞은 뒤 순서)
     answer_index: Optional[int] = None                      # 객관식 정답 위치 (0부터)
     explanation: str = ""                                   # 객관식 해설 (왜 정답인지, 오답은 왜 틀렸는지)
+    figure: Optional[Figure] = None                         # 문제에 필요한 트리·배열·표 (없으면 None)
 
     @property
     def is_mcq(self) -> bool:
@@ -175,3 +192,20 @@ class Explanation(BaseModel):
     source_pages: list[int] = Field(default_factory=list)
     not_found: bool = False
     not_found_note: Optional[str] = None
+
+
+# 6.9 시험 대비 요약 노트 ----------------------------------------------------------
+
+DETAIL_FULL = "자세히"
+DETAIL_MID = "보통"
+DETAIL_SHORT = "짧게"
+
+
+class NoteSection(BaseModel):
+    concept_id: str = ""
+    detail: str = DETAIL_SHORT
+    summary: str
+    key_points: list[str] = Field(default_factory=list)
+    pitfalls: list[str] = Field(default_factory=list)
+    source_pages: list[int] = Field(default_factory=list)
+    from_ai: bool = True
