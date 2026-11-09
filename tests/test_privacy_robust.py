@@ -1,5 +1,5 @@
-# T-42 ~ T-46 (v1.8): 대본도 가리기, 형식이 틀린 AI 항목은 그것만 버리기, '내가 놓친 점' 바로잡기,
-# 문제 그림 때문에 교재에 오류가 있다고 단정하지 않기, 기다리는 안내가 어디서든 보이기
+# T-42 ~ T-48 (v1.8~v1.9): 대본도 가리기, 형식이 틀린 AI 항목은 그것만 버리기, '내가 놓친 점' 바로잡기,
+# 문제 그림 때문에 교재에 오류가 있다고 단정하지 않기, 기다리는 안내가 어디서든 보이기, 서술형 크기 줄이기
 from pathlib import Path
 
 import pytest
@@ -119,3 +119,36 @@ def test_t46_waiting_notice_visible_wherever_scrolled():
     app_src = (ROOT / "app.py").read_text(encoding="utf-8")
     rule = app_src.split('[data-testid="stSpinner"] {', 1)[1].split("}", 1)[0]
     assert "position: fixed" in rule and "bottom:" in rule
+
+
+# ----------------------------------------------------------------- T-47, T-48 서술형 부담 줄이기 (v1.9)
+
+
+def test_t47_essay_question_asks_at_most_two_things():
+    """서술형 한 문제에 3~4가지를 한꺼번에 묻지 않게: 최대 2가지, 2~3문장, 채점 요소 2~4개."""
+    p = prompts.load("03A")
+    assert "최대 2가지" in p and "2~3문장" in p and "2~4개 요소" in p
+    assert "2~5" not in p and "시간 복잡도와 이유를 쓰시오" not in p      # 예전 크기·여러 개를 묻는 예시가 없음
+    assert "아는 만큼 2~3문장으로" in (ROOT / "app.py").read_text(encoding="utf-8")
+
+
+def _app_function(name: str):
+    """app.py를 import하지 않고(streamlit 없이) 함수 하나만 꺼내 실행한다."""
+    import ast
+    src = (ROOT / "app.py").read_text(encoding="utf-8")
+    node = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == name)
+    ns: dict = {}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), "app.py", "exec"), ns)
+    return ns[name]
+
+
+def test_t48_prompt_change_reloads_prompts_and_sample_questions():
+    """프롬프트 파일만 바뀌어도 배포 뒤 예전 프롬프트·예전 샘플 문제를 버린다."""
+    changed = _app_function("_mtimes_changed")
+    seen = {"core.diagnose": 1.0, "prompts/03A.md": 2.0}
+    assert not changed(seen, {"core.diagnose": 1.0, "core": 9.0, "prompts/03A.md": 2.0})   # 그대로면 아무것도 안 함
+    assert changed(seen, {"core.diagnose": 1.0, "prompts/03A.md": 3.0})                    # 프롬프트가 바뀜
+    assert changed(seen, {"core.diagnose": 1.5, "prompts/03A.md": 2.0})                    # 모듈이 바뀜
+    assert changed({"core.diagnose": 1.0}, {"core.diagnose": 1.0, "prompts/03A.md": 2.0})  # 프롬프트 기록이 없던 첫 배포
+    app_src = (ROOT / "app.py").read_text(encoding="utf-8")
+    assert "now.update(_prompt_mtimes())" in app_src and "sys._bintm_mtimes.update(_prompt_mtimes())" in app_src
