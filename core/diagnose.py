@@ -43,13 +43,15 @@ MODE_ESSAY = "모두 서술형"
 QUESTION_MODES = (MODE_MIX, MODE_MCQ, MODE_ESSAY)
 
 
-def diag_targets(scores: ScoresResult, min_pct: int = DIAG_MIN_PCT) -> list[str]:
+def diag_targets(scores: ScoresResult, min_pct: int = DIAG_MIN_PCT, top: Optional[int] = None) -> list[str]:
     """진단할 개념 = 출제 가능성이 min_pct 이상인 개념 전부 (순위 순서).
 
     우선순위 = 출제 가능성 × (1 − 이해도) 이므로 출제 가능성이 20 미만이면 진단 결과와 상관없이 우선순위가
     20 미만("복습만")이다. 결과가 바뀌지 않는 문제는 내지 않는다.
+    top: "빠른 진단"일 때 그중 출제 가능성 상위 top개만 (v1.5). 나머지는 '진단 안 함'(이해도 0.5)으로 계산된다.
     """
-    return [s.concept_id for s in scores.scores if s.pct >= min_pct]
+    ids = [s.concept_id for s in scores.scores if s.pct >= min_pct]
+    return ids[:top] if top is not None and top > 0 else ids
 
 
 def question_kind(exam_pct: int, mode: str = MODE_MIX, essay_min_pct: int = ESSAY_MIN_PCT) -> str:

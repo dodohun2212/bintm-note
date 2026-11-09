@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from typing import Optional
 
@@ -29,16 +30,27 @@ class LLMKeyError(LLMError):
 
 
 class Usage(dict):
-    """호출별 토큰 사용량 누적. {"calls", "input_tokens", "output_tokens", "seconds"}"""
+    """호출별 토큰 사용량 누적. {"calls", "input_tokens", "output_tokens", "seconds"}
+
+    여러 스레드가 같은 Usage에 동시에 더하므로 잠금을 쓴다.
+    """
+
+    _lock = threading.Lock()
 
     def __init__(self):
         super().__init__(calls=0, input_tokens=0, output_tokens=0, seconds=0.0)
 
     def add(self, input_tokens: int, output_tokens: int, seconds: float) -> None:
-        self["calls"] += 1
-        self["input_tokens"] += int(input_tokens or 0)
-        self["output_tokens"] += int(output_tokens or 0)
-        self["seconds"] += float(seconds or 0.0)
+        """AI 호출 1번을 더한다."""
+        self.merge({"calls": 1, "input_tokens": input_tokens, "output_tokens": output_tokens, "seconds": seconds})
+
+    def merge(self, other: dict) -> None:
+        """다른 Usage(여러 호출의 합)를 그대로 더한다. 호출 수도 그만큼 늘린다 (v1.5: 전에는 묶음을 1번으로 셌음)."""
+        with self._lock:
+            self["calls"] += int(other.get("calls", 0) or 0)
+            self["input_tokens"] += int(other.get("input_tokens", 0) or 0)
+            self["output_tokens"] += int(other.get("output_tokens", 0) or 0)
+            self["seconds"] += float(other.get("seconds", 0.0) or 0.0)
 
 
 def fake_mode() -> bool:

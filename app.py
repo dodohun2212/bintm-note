@@ -6,14 +6,16 @@ import html
 import json
 import os
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
 
 import streamlit as st
 
-from config import (AUTO_EXPLAIN_TOP, CONFUSION_MAX_CHARS, DIAG_MIN_PCT, ESSAY_MIN_PCT, LLM_MODEL, MAX_AUDIO_MB,
-                    MAX_MATERIAL_MB, MAX_PAGES, STT_MODEL)
+from config import (AUTO_EXPLAIN_TOP, CONFUSION_MAX_CHARS, DIAG_MIN_PCT, ESSAY_MIN_PCT, LLM_MODEL,
+                    MAX_ANALYSES_PER_DAY, MAX_ANALYSES_PER_SESSION, MAX_AUDIO_MB, MAX_MATERIAL_MB, MAX_PAGES,
+                    QUICK_DIAG_TOP, STT_MODEL)
 from core import stt
 from core.concepts import NoConceptsError, extract_concepts
 from core.diagnose import (CIRCLED, MODE_MIX, QUESTION_MODES, REASON_BLANK, REASON_DONT_KNOW, diag_targets,
@@ -24,6 +26,7 @@ from core.export import notes_html, study_html
 from core.extract import (SUPPORTED_AUDIO, SUPPORTED_MATERIAL, ExtractError, extract_material, file_ext, is_scanned,
                           run_id)
 from core.figure import FIGURE_CSS, figure_html
+from core.guard import DailyCounter, ResultCache, session_left
 from core.llm import LLMError, LLMJsonError, LLMKeyError, Usage, fake_mode, has_key
 from core.note import lecture_order, make_note_section, note_detail, professor_quotes, short_section
 from core.pageimg import PAGE_IMG_WIDTH, render_page
@@ -138,7 +141,7 @@ DEFAULTS = dict(
     step=1, material=None, transcript=None, transcript_source=None, concepts=None, utterances=None, scores=None,
     questions={}, answers={}, dont_know={}, mcq_choice={}, guessed={}, confusion={}, grading={}, priorities=None,
     explanations={}, run_id=None, errors=[], usage=None, from_sample=False, diag_ids=[], q_mode=MODE_MIX, q_mode_used=None,
-    material_bytes=None, notes={}, notes_failed=[],
+    material_bytes=None, notes={}, notes_failed=[], quick_diag=False,
     show_missing=False, grade_failed=[], grade_error=None, explain_failed=[], q_failed=[],
 )
 
@@ -149,6 +152,7 @@ def init_state() -> None:
             st.session_state[k] = v if not isinstance(v, (dict, list)) else type(v)()
     if st.session_state.usage is None:
         st.session_state.usage = Usage()
+    st.session_state.setdefault("analyses_used", 0)   # reset_state()로 지우지 않는다 (v1.5)
 
 
 def reset_state() -> None:
@@ -274,7 +278,7 @@ def explanation_html(e: Explanation, confusion: str = "") -> str:
     out.append(f'<div class="bt-ex">{paragraphs(e.explanation)}</div>')
     if e.not_found:
         out.append(f'<div class="bt-warn">⚠️ 올린 자료에서 찾지 못함 · {h(e.not_found_note or "")} '
-                   '교재 다른 장이나 수업 노트를 확인하세요. (E-12)</div>')
+                   '교재 다른 장이나 수업 노트를 확인하세요.</div>')
     if e.check_pages:
         out.append(f'<div class="bt-pages">📖 다시 볼 페이지: {h(", ".join(f"p.{n}" for n in e.check_pages))}</div>')
     return "".join(out)
@@ -294,8 +298,12 @@ def choices_html(q: Question, chosen: int | None) -> str:
 # ----------------------------------------------------------------- 캐시 (4.4)
 
 
+_cache_run = threading.local()   # 캐시 함수 본문이 실제로 돌았는지(=AI를 불렀는지) 표시 (v1.5)
+
+
 @st.cache_data(show_spinner=False)
 def cached_concepts(rid: str, material_json: str) -> tuple[str, dict]:
+    _cache_run.ran = True
     usage = Usage()
     material = Material.model_validate_json(material_json)
     result = extract_concepts(material, usage)
@@ -304,6 +312,7 @@ def cached_concepts(rid: str, material_json: str) -> tuple[str, dict]:
 
 @st.cache_data(show_spinner=False)
 def cached_utterances(rid: str, concepts_json: str, transcript: str) -> tuple[str, dict]:
+    _cache_run.ran = True
     usage = Usage()
     concepts = ConceptsResult.model_validate_json(concepts_json)
     utts = find_utterances(concepts.concepts, transcript, usage)
@@ -311,7 +320,51 @@ def cached_utterances(rid: str, concepts_json: str, transcript: str) -> tuple[st
 
 
 def add_usage(u: dict) -> None:
-    st.session_state.usage.add(u.get("input_tokens", 0), u.get("output_tokens", 0), u.get("seconds", 0.0))
+    st.session_state.usage.merge(u)
+
+
+def call_cached(fn, *args) -> tuple[str, dict]:
+    """캐시 함수를 부르고, 캐시에서 꺼냈으면(AI 호출 없음) 사용량을 더하지 않는다."""
+    _cache_run.ran = False
+    out, u = fn(*args)
+    if _cache_run.ran:
+        add_usage(u)
+    return out, u
+
+
+# ----------------------------------------------------------------- API 비용 보호 (v1.5)
+
+
+@st.cache_resource
+def daily_counter() -> DailyCounter:
+    """서버 전체에서 하나. 하루 분석 횟수."""
+    return DailyCounter(MAX_ANALYSES_PER_DAY)
+
+
+@st.cache_resource
+def sample_question_cache() -> ResultCache:
+    """샘플 자료의 진단 문제. 모두 같은 파일이라 한 번 만든 문제를 다음 사람에게도 낸다(AI 호출 절약)."""
+    return ResultCache()
+
+
+def take_analysis() -> bool:
+    """분석 1회를 쓴다. 세션 한도나 오늘 서버 한도가 다 찼으면 안내하고 False."""
+    if session_left(st.session_state.analyses_used, MAX_ANALYSES_PER_SESSION) == 0:
+        show_error(f"이 화면에서는 분석을 {MAX_ANALYSES_PER_SESSION}번까지 할 수 있어요. 지금 결과는 ②~④에서 계속 볼 수 "
+                   "있어요. (E-16)")
+        return False
+    if not daily_counter().try_take():
+        show_error("오늘 이 앱에서 쓸 수 있는 분석 횟수를 다 썼어요. 내일 다시 이용해 주세요. "
+                   "직접 실행하려면 README의 로컬 실행 방법을 보세요. (E-17)")
+        return False
+    st.session_state.analyses_used += 1
+    return True
+
+
+def give_back_analysis() -> None:
+    """분석이 실패하면 센 횟수를 돌려준다."""
+    st.session_state.analyses_used = max(0, st.session_state.analyses_used - 1)
+    daily_counter().give_back()
 
 
 # ----------------------------------------------------------------- 분석 실행 (4.1 단계 1~7)
@@ -344,15 +397,13 @@ def run_analysis(material_bytes: bytes, material_name: str, audio_bytes: bytes |
                     st.session_state.errors.append(str(e))
 
             status.update(label="개념 찾는 중")
-            concepts_json, u1 = cached_concepts(rid, material.model_dump_json())
-            add_usage(u1)
+            concepts_json, _ = call_cached(cached_concepts, rid, material.model_dump_json())
             concepts = ConceptsResult.model_validate_json(concepts_json)
 
             utts: list[Utterance] = []
             if transcript:
                 status.update(label="교수님 강조 찾는 중")
-                utts_json, u2 = cached_utterances(rid, concepts_json, transcript)
-                add_usage(u2)
+                utts_json, _ = call_cached(cached_utterances, rid, concepts_json, transcript)
                 utts = [Utterance.model_validate(x) for x in json.loads(utts_json)]
 
             status.update(label="점수 계산 중")
@@ -397,7 +448,7 @@ def screen_s01() -> None:
     with st.container(border=True):
         st.subheader("1. 강의자료", anchor=False)
         material_file = st.file_uploader(f"PDF 또는 PPTX · 최대 {MAX_MATERIAL_MB}MB", type=list(SUPPORTED_MATERIAL),
-                                         accept_multiple_files=False)
+                                         accept_multiple_files=False, max_upload_size=MAX_MATERIAL_MB)
 
     with st.container(border=True):
         st.subheader("2. 강의 녹음 (권장)", anchor=False)
@@ -405,7 +456,9 @@ def screen_s01() -> None:
         tab_audio, tab_paste = st.tabs(["🎙️ 녹음 파일", "📝 대본 붙여넣기"])
         with tab_audio:
             if stt.stt_available() or fake_mode():
-                audio_file = st.file_uploader(f"m4a · mp3 · wav · 최대 {MAX_AUDIO_MB}MB", type=list(SUPPORTED_AUDIO))
+                # 업로더별 상한: 서버 기본값(30MB)이 아니라 녹음 상한(25MB)이 기본 안내("25MB per file")에도 보이게 (v1.5)
+                audio_file = st.file_uploader(f"m4a · mp3 · wav · 최대 {MAX_AUDIO_MB}MB", type=list(SUPPORTED_AUDIO),
+                                              max_upload_size=MAX_AUDIO_MB)
             else:
                 audio_file = None
                 st.info("음성 인식 키가 없어 녹음 파일은 받을 수 없어요. 대본 붙여넣기를 써 주세요.")
@@ -420,6 +473,9 @@ def screen_s01() -> None:
         sample = st.button("샘플 자료로 체험하기", disabled=not has_key(), width="stretch",
                            help="우리가 만든 가상 강의자료(자료구조 8장, 20쪽)와 녹음 대본으로 바로 돌려 봅니다.")
     st.caption(NOTICE + " 올린 자료와 녹음은 분석을 위해 AI 제공사(Anthropic, OpenAI) 서버로 전송되고, 이 앱의 서버에는 저장하지 않아요.")
+    left = session_left(st.session_state.analyses_used, MAX_ANALYSES_PER_SESSION)
+    if 0 <= left <= 2:
+        st.caption(f"이 화면에서 분석은 {left}번 더 할 수 있어요 (모두가 함께 쓰는 AI 사용량을 아끼기 위한 제한).")
 
     if start and material_file is not None:
         if material_file.size > MAX_MATERIAL_MB * 1_000_000:
@@ -434,12 +490,18 @@ def screen_s01() -> None:
                 show_error(f"녹음은 m4a/mp3/wav {MAX_AUDIO_MB}MB까지예요. 길면 앞부분만 잘라 올리거나 대본 붙여넣기를 써 주세요. (E-04)")
                 return
             audio_bytes, audio_name = audio_file.getvalue(), audio_file.name
+        if not take_analysis():
+            return
         if run_analysis(material_file.getvalue(), material_file.name, audio_bytes, audio_name, pasted, False):
             go(2)
+        give_back_analysis()
     elif sample:
+        if not take_analysis():
+            return
         if run_analysis(SAMPLE_PDF.read_bytes(), SAMPLE_PDF.name, None, None,
                         SAMPLE_SCRIPT.read_text(encoding="utf-8"), True):
             go(2)
+        give_back_analysis()
 
 
 # ----------------------------------------------------------------- 화면 S02
@@ -451,7 +513,8 @@ def screen_s02() -> None:
     concepts: list[Concept] = st.session_state.concepts.concepts
     by_id = {c.id: c for c in concepts}
     utts: list[Utterance] = st.session_state.utterances or []
-    targets = diag_targets(scores)
+    all_targets = diag_targets(scores)
+    targets = all_targets
 
     show(tiles([("찾은 개념", len(concepts), "blue"), ("교수님 강조", len(utts), "amber"),
                 ("진단할 개념", len(targets), "red")]))
@@ -496,12 +559,21 @@ def screen_s02() -> None:
                     index=QUESTION_MODES.index(st.session_state.q_mode), key="q_mode_radio",
                     captions=[f"출제 가능성 {ESSAY_MIN_PCT}% 이상은 서술형, 나머지는 객관식", "빠르게 풀기", "깊게 확인하기"])
     st.session_state.q_mode = mode
+    if len(all_targets) > QUICK_DIAG_TOP:   # 기본은 꺼짐: 20% 이상 전부 진단 (v1.5)
+        quick = st.toggle(f"빠른 진단: 출제 가능성 상위 {QUICK_DIAG_TOP}개만 풀기", disabled=graded,
+                          value=st.session_state.quick_diag, key="quick_diag_toggle",
+                          help=f"시간이 없을 때 {len(all_targets)}문제 대신 {QUICK_DIAG_TOP}문제만 풀어요. 나머지 "
+                               f"{len(all_targets) - QUICK_DIAG_TOP}개는 '진단 안 함'(이해도 0.5)으로 공부 순서를 계산해요.")
+        st.session_state.quick_diag = quick
+        if quick:
+            targets = diag_targets(scores, top=QUICK_DIAG_TOP)
     label = "진단 결과 보기 →" if graded else f"{len(targets)}개 개념 진단하기 →"
     if st.button(label, type="primary", width="stretch"):
         if not graded and st.session_state.q_mode_used != mode:
             st.session_state.update(questions={}, answers={}, dont_know={}, mcq_choice={}, guessed={}, confusion={})
         st.session_state.q_mode_used = mode
-        st.session_state.diag_ids = targets
+        if not graded:
+            st.session_state.diag_ids = targets
         go(3)
 
 
@@ -515,6 +587,17 @@ def _make_questions(ids: list[str]) -> None:
     pct = {s.concept_id: s.pct for s in st.session_state.scores.scores}
     mode = st.session_state.q_mode_used or st.session_state.q_mode
     todo = [cid for cid in ids if cid not in st.session_state.questions]
+    cache = sample_question_cache() if st.session_state.from_sample else None
+
+    def key(cid: str) -> tuple:
+        return (st.session_state.run_id, cid, question_kind(pct[cid], mode), tuple(by_id[x].name for x in ids if x != cid))
+
+    if cache is not None:   # 샘플 자료는 다른 사람이 이미 만든 같은 문제를 다시 쓴다 (v1.5)
+        for cid in list(todo):
+            hit = cache.get(key(cid))
+            if hit is not None:
+                st.session_state.questions[cid] = hit.model_copy(deep=True)
+                todo.remove(cid)
     if not todo:
         return
     usage = Usage()
@@ -543,6 +626,8 @@ def _make_questions(ids: list[str]) -> None:
     for cid, out in results:
         if not isinstance(out, Exception):
             st.session_state.questions[cid] = out
+            if cache is not None:
+                cache.put(key(cid), out.model_copy(deep=True))
     if failed:   # 문제를 못 만든 개념은 이번 진단에서 뺀다 (공부 순서에서는 '진단 안 함')
         st.session_state.q_failed = [by_id[cid].name for cid, _ in failed]
         st.session_state.diag_ids = [cid for cid in st.session_state.diag_ids if cid in st.session_state.questions]
@@ -1002,7 +1087,8 @@ def screen_s04() -> None:
             show(f'<div class="bt-tier">{h(tier)} · {len(rows)}개<small>{h(note)}</small></div>')
             if tier == "복습만":
                 with st.expander(f"복습만 {len(rows)}개 펼치기"):
-                    st.caption(f"'진단 안 함'은 출제 가능성이 {DIAG_MIN_PCT}% 미만이라 문제를 내지 않은 개념이에요.")
+                    st.caption(f"'진단 안 함'은 문제를 내지 않은 개념이에요(출제 가능성 {DIAG_MIN_PCT}% 미만이거나 "
+                               "빠른 진단에서 뺀 개념). 이해도 0.5로 계산해요.")
                     for p in rows:
                         _concept_block(rank[p.concept_id], p)
             else:
