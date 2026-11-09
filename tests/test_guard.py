@@ -1,4 +1,4 @@
-# T-18 API 비용 보호 (v1.5): 세션당 분석 횟수, 서버 전체 하루 횟수, 샘플 문제 재사용, 빠른 진단
+# T-35~T-39 API 비용 보호 (v1.5): 세션당 분석 횟수, 서버 전체 하루 횟수, 샘플 문제 재사용, 빠른 진단
 import threading
 from datetime import date
 
