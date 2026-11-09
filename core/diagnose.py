@@ -55,7 +55,7 @@ def diag_targets(scores: ScoresResult, min_pct: int = DIAG_MIN_PCT, top: Optiona
 
 
 def question_kind(exam_pct: int, mode: str = MODE_MIX, essay_min_pct: int = ESSAY_MIN_PCT) -> str:
-    """섞어서: 출제 가능성이 높은 개념(50% 이상)은 서술형으로 깊게, 나머지는 객관식으로 빠르게."""
+    """섞어서: 출제 가능성 점수가 높은 개념(50점 이상)은 서술형으로 깊게, 나머지는 객관식으로 빠르게."""
     if mode == MODE_MCQ:
         return QTYPE_MCQ
     if mode == MODE_ESSAY:

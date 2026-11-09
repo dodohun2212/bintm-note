@@ -1,4 +1,4 @@
-# T-25~T-30: 문제 그림(트리·배열·표), 그림·페이지를 가리키는 문제 다시 만들기, 원본 페이지 그림, 시험 대비 요약 노트
+# T-25~T-30, T-41: 문제 그림(트리·배열·표), 그림·페이지를 가리키는 문제 다시 만들기, 원본 페이지 그림, 시험 대비 요약 노트, 출제 점수 표기
 import os
 from pathlib import Path
 
@@ -208,3 +208,25 @@ def test_t30_exports_split_without_page_images():
     doc = notes_html("s.pdf", pri, notes, note_order=["c1"], quotes={"c1": [("시험 힌트", "이건 시험에 내기 좋죠")]})
     assert "시험 대비 요약 노트" in doc and "오답노트" not in doc and "data:image/jpeg" not in doc
     assert "&lt;b&gt;요약" in doc and "<b>요약" not in doc and "이건 시험에 내기 좋죠" in doc
+
+
+def test_t41_exam_score_shown_as_points_not_percent():
+    """v1.7: 출제 가능성은 가장 높은 개념 = 100점인 비교용 점수다. 확률처럼 읽히지 않게 화면·내려받기에 %를 쓰지 않는다."""
+    import re
+    from core.export import notes_html, study_html
+    from core.schemas import Explanation, NoteSection, Question, ScoreRow, ScoresResult
+
+    scores = ScoresResult(max_raw=1, scores=[ScoreRow(concept_id="c1", name="순회", raw=1, pct=80, body_pages=[9],
+                                                      reasons=[])])
+    pri = [_row("c1", 80, "모름", 80, "지금 당장").model_copy(update={"name": "순회"})]
+    q = Question(question="후위 순회하시오.", answer="a b +", source_pages=[9])
+    study = study_html("s.pdf", scores, {"c1": Grading(score=0, status="모름", reason="틀림")}, pri,
+                       {"c1": Explanation(my_gap="순서", explanation="설명 (p.9)", source_pages=[9])},
+                       transcript_used=True, questions={"c1": q}, answer_texts={"c1": "x"})
+    doc = notes_html("s.pdf", pri, {"c1": NoteSection(concept_id="c1", detail="자세히", summary="요약 (p.9)",
+                                                      source_pages=[9])}, note_order=["c1"], quotes={})
+    assert "출제 가능성 점수 80점" in study and "출제 점수 80" in study and "출제 점수 80" in doc
+    assert not re.search(r"출제[^<%]{0,15}%", study + doc)
+    app_src = (Path(__file__).resolve().parent.parent / "app.py").read_text(encoding="utf-8")
+    assert not re.search(r"출제[^\n%]{0,25}\}%", app_src) and "{s.pct}%" not in app_src
+    assert "확률이 아니며" in app_src                                  # ② 화면 설명

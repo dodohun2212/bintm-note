@@ -117,6 +117,7 @@ h1 {word-break: keep-all;}
 .bt-rank {font-weight: 800; color: #6e7781; text-align: center; font-size: 1.05rem;}
 .bt-name {font-weight: 700; font-size: 1.06rem; line-height: 1.45;}
 .bt-pct {font-weight: 800; text-align: right; font-size: 1.1rem;}
+.bt-pct small {font-size: .75rem; font-weight: 600; margin-left: 1px; color: #6e7781;}
 .bt-bar {height: 7px; border-radius: 4px; background: rgba(128,128,128,.18); margin: 6px 0 6px; overflow: hidden;}
 .bt-bar i {display: block; height: 100%; background: #2563eb; border-radius: 4px;}
 .bt-chip {display: inline-block; font-size: .8rem; padding: 1px 8px; border-radius: 6px; margin: 2px 4px 0 0;
@@ -288,7 +289,7 @@ def concept_row(rank: int, s: ScoreRow, dim: bool = False) -> str:
     return (f'<div class="bt-row{" dim" if dim else ""}"><div class="bt-rank">{rank}</div>'
             f'<div><div class="bt-name">{h(s.name)}</div>'
             f'<div class="bt-bar"><i style="width:{max(0, min(100, s.pct))}%"></i></div>'
-            f'<div>{reason_chips(s.reasons)}</div></div><div class="bt-pct">{s.pct}%</div></div>')
+            f'<div>{reason_chips(s.reasons)}</div></div><div class="bt-pct">{s.pct}<small>점</small></div></div>')
 
 
 def confusion_html(confusion: str, reply: str | None = None) -> str:
@@ -559,17 +560,17 @@ def screen_s02() -> None:
     low = [s for s in scores.scores if s.concept_id not in targets]
     for i, s in enumerate(scores.scores, start=1):
         if low and s is low[0]:
-            rows.append(f'<div class="bt-split">아래 {len(low)}개는 출제 가능성이 {DIAG_MIN_PCT}% 미만이라 진단하지 않고 '
+            rows.append(f'<div class="bt-split">아래 {len(low)}개는 출제 가능성 점수가 {DIAG_MIN_PCT}점 미만이라 진단하지 않고 '
                         "'복습만'으로 둬요.</div>")
         rows.append(concept_row(i, s, dim=s.concept_id not in targets))
     show('<div class="bt-list">' + "".join(rows) + "</div>")
-    st.caption(f"출제 가능성은 자료와 녹음의 신호를 정해진 규칙(가중치 {WEIGHTS_VERSION})으로 더한 값이에요. "
-               "가장 높은 개념이 100%예요. 실제 출제를 보장하지 않습니다.")
+    st.caption(f"출제 가능성 점수는 자료와 녹음의 신호를 정해진 규칙(가중치 {WEIGHTS_VERSION})으로 더해, "
+               "가장 높은 개념을 100점으로 맞춘 비교용 점수예요. 확률이 아니며 실제 출제를 보장하지 않습니다.")
 
     with st.expander("점수 내역과 교수님이 한 말 자세히 보기"):
         for i, s in enumerate(scores.scores, start=1):
             c = by_id[s.concept_id]
-            st.markdown(f"**{i}. {c.name}** · {s.pct}%")
+            st.markdown(f"**{i}. {c.name}** · {s.pct}점")
             lines = []
             if c.summary:
                 lines.append(f"<p>{h(c.summary)}</p>")
@@ -589,9 +590,9 @@ def screen_s02() -> None:
         return
     mode = st.radio("문제 형식", QUESTION_MODES, horizontal=True, disabled=graded,
                     index=QUESTION_MODES.index(st.session_state.q_mode), key="q_mode_radio",
-                    captions=[f"출제 가능성 {ESSAY_MIN_PCT}% 이상은 서술형, 나머지는 객관식", "빠르게 풀기", "깊게 확인하기"])
+                    captions=[f"출제 가능성 점수 {ESSAY_MIN_PCT}점 이상은 서술형, 나머지는 객관식", "빠르게 풀기", "깊게 확인하기"])
     st.session_state.q_mode = mode
-    if len(all_targets) > QUICK_DIAG_TOP:   # 기본은 꺼짐: 20% 이상 전부 진단 (v1.5)
+    if len(all_targets) > QUICK_DIAG_TOP:   # 기본은 꺼짐: 20점 이상 전부 진단 (v1.5)
         quick = st.toggle(f"빠른 진단: 출제 가능성 상위 {QUICK_DIAG_TOP}개만 풀기", disabled=graded,
                           value=st.session_state.quick_diag, key="quick_diag_toggle",
                           help=f"시간이 없을 때 {len(all_targets)}문제 대신 {QUICK_DIAG_TOP}문제만 풀어요. 나머지 "
@@ -801,7 +802,7 @@ def screen_s03() -> None:
         q = questions[cid]
         with st.container(border=True):
             show(f'<div class="bt-qhead"><span class="bt-qno">Q{number[cid]}</span><span class="bt-name">{h(by_id[cid].name)}</span></div>'
-                 f'<div>{badge(q.kind, "kind")}{badge(f"출제 {pct.get(cid, 0)}%", "none")}</div>'
+                 f'<div>{badge(q.kind, "kind")}{badge(f"출제 점수 {pct.get(cid, 0)}", "none")}</div>'
                  f'<div class="bt-q">{h(q.question)}</div>{figure_html(q.figure)}')
             g = grading.get(cid)
             if g is not None:
@@ -975,7 +976,7 @@ def _concept_block(rank: int, p: PriorityRow) -> None:
     e: Explanation | None = st.session_state.explanations.get(p.concept_id)
     with st.container(border=True):
         show(f'<div class="bt-qhead"><span class="bt-qno">{rank}</span><span class="bt-name">{h(p.name)}</span></div>'
-             f"<div>{status_badge(p.status)}{badge(f'출제 {p.exam_pct}%', 'none')}{badge(f'우선순위 {p.priority}', 'kind')}</div>")
+             f"<div>{status_badge(p.status)}{badge(f'출제 점수 {p.exam_pct}', 'none')}{badge(f'우선순위 {p.priority}', 'kind')}</div>")
         _review_expander(p.concept_id)
         if e is None:
             if p.concept_id in st.session_state.explain_failed:
@@ -1031,7 +1032,7 @@ def _note_block(c: Concept, p: PriorityRow, sec: NoteSection | None) -> None:
     detail = sec.detail if sec is not None else note_detail(p)
     with st.container(border=True):
         show(f'<div class="bt-qhead"><span class="bt-name">{h(c.name)}</span></div>'
-             f"<div>{badge(detail, 'kind')}{badge(p.action, 'none')}{badge(f'출제 {p.exam_pct}%', 'none')}"
+             f"<div>{badge(detail, 'kind')}{badge(p.action, 'none')}{badge(f'출제 점수 {p.exam_pct}', 'none')}"
              f"{status_badge(p.status)}</div>")
         if sec is None:
             st.caption("이 개념의 요약을 만들지 못했어요. 아래 '요약 노트 다시 만들기'를 눌러 주세요.")
@@ -1147,7 +1148,7 @@ def screen_s04() -> None:
             show(f'<div class="bt-tier">{h(tier)} · {len(rows)}개<small>{h(note)}</small></div>')
             if tier == "복습만":
                 with st.expander(f"복습만 {len(rows)}개 펼치기"):
-                    st.caption(f"'진단 안 함'은 문제를 내지 않은 개념이에요(출제 가능성 {DIAG_MIN_PCT}% 미만이거나 "
+                    st.caption(f"'진단 안 함'은 문제를 내지 않은 개념이에요(출제 가능성 점수 {DIAG_MIN_PCT}점 미만이거나 "
                                "빠른 진단에서 뺀 개념). 이해도 0.5로 계산해요.")
                     for p in rows:
                         _concept_block(rank[p.concept_id], p)
@@ -1166,14 +1167,15 @@ def screen_s04() -> None:
 
         with st.expander("전체 표로 보기"):
             st.dataframe(
-                [{"순위": rank[p.concept_id], "개념": p.name, "출제 가능성": p.exam_pct, "이해 상태": p.status,
+                [{"순위": rank[p.concept_id], "개념": p.name, "출제 점수": p.exam_pct, "이해 상태": p.status,
                   "우선순위 점수": p.priority, "권장": p.action} for p in pri],
                 hide_index=True, width="stretch",
                 column_config={
-                    "출제 가능성": st.column_config.ProgressColumn(format="%d%%", min_value=0, max_value=100),
+                    "출제 점수": st.column_config.ProgressColumn(format="%d점", min_value=0, max_value=100,
+                                                           help="가장 높은 개념 = 100점인 비교용 점수 (확률 아님)"),
                     "우선순위 점수": st.column_config.ProgressColumn(format="%d", min_value=0, max_value=100),
                 })
-            st.caption("우선순위 점수 = 출제 가능성 × (1 − 이해도). 이해도: 앎 1.0 · 헷갈림 0.5 · 모름 0.0 · 진단 안 함 0.5. "
+            st.caption("우선순위 점수 = 출제 점수 × (1 − 이해도). 이해도: 앎 1.0 · 헷갈림 0.5 · 모름 0.0 · 진단 안 함 0.5. "
                        "50 이상 지금 당장, 20~49 다음, 20 미만 복습만.")
     with tab_note:
         _note_view(pri)
@@ -1195,7 +1197,7 @@ def screen_s05() -> None:
 **사용 방법**
 1. 강의자료(PDF/PPTX)와 녹음(또는 대본)을 올리고 **분석 시작**
 2. ② 출제 포인트 순위와 근거를 확인
-3. ③ 출제 가능성 {DIAG_MIN_PCT}% 이상인 개념을 전부 객관식·서술형 문제로 진단 (모든 문제에 답해야 채점, 모르면 '모르겠어요')
+3. ③ 출제 가능성 점수 {DIAG_MIN_PCT}점 이상인 개념을 전부 객관식·서술형 문제로 진단 (모든 문제에 답해야 채점, 모르면 '모르겠어요')
 4. ④ 공부 순서와 오답노트(문제·내 답·채점·보완 설명), 강의 순서대로 정리한 **시험 대비 요약 노트**를 보고,
    **공부 순서·오답노트**와 **요약 노트**를 HTML 파일로 따로 저장
 
@@ -1211,7 +1213,7 @@ def screen_s05() -> None:
     st.table({
         "항목": ["언어 모델", "음성 인식", "진단 기준", "문제 형식", "가중치 버전", "이번 세션 AI 호출", "입력 토큰", "출력 토큰"],
         "값": [LLM_MODEL, (STT_MODEL if stt.stt_available() else "꺼짐 (대본 붙여넣기만)"),
-               f"출제 가능성 {DIAG_MIN_PCT}% 이상 전부", st.session_state.q_mode, WEIGHTS_VERSION,
+               f"출제 가능성 점수 {DIAG_MIN_PCT}점 이상 전부", st.session_state.q_mode, WEIGHTS_VERSION,
                str(u["calls"]), str(u["input_tokens"]), str(u["output_tokens"])],
     })
     if fake_mode():

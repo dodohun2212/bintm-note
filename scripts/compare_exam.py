@@ -82,12 +82,12 @@ def main() -> int:
     print(f"자료: {material.name} ({material.n_pages}쪽) · 대본: {'있음' if transcript.strip() else '없음'} · 가중치 {WEIGHTS_VERSION}")
     print(f"개념 {len(concepts.concepts)}개 · 발화 {len(utts)}개 · AI 호출 {usage['calls']}회, 입력 {usage['input_tokens']} 출력 {usage['output_tokens']} 토큰, {usage['seconds']:.1f}초")
     print(f"\n상위 {len(top)}개 중 실제 출제 개념과 맞은 것: {len(hits)}개 / 출제 개념 {len(exam_concepts)}개 중 상위 {len(top)}개에 들어온 것: {len(covered)}개\n")
-    print("| 순위 | 개념 | 출제 가능성 | 실제 출제 |")
+    print("| 순위 | 개념 | 출제 점수 | 실제 출제 |")
     print("|---|---|---|---|")
     hit_names = {h[0] for h in hits}
     for i, s in enumerate(scores.scores, start=1):
         mark = "O" if s.name in hit_names else ""
-        print(f"| {i} | {s.name} | {s.pct}% | {mark} |")
+        print(f"| {i} | {s.name} | {s.pct} | {mark} |")
     missed = [e["name"] for e in exam_concepts if e["name"] not in covered]
     if missed:
         print("\n상위 밖이거나 못 찾은 출제 개념: " + ", ".join(missed))

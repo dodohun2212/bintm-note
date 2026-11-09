@@ -160,12 +160,12 @@ def _priority_section(priorities: list[PriorityRow], reasons: dict[str, list[str
             out.append(
                 f'<div class="row"><div class="rank">{rank[p.concept_id]}</div>'
                 f'<div><div class="name">{_e(p.name)}</div>'
-                f'<div class="small">출제 가능성 {p.exam_pct}% · 우선순위 점수 {p.priority}</div>'
+                f'<div class="small">출제 가능성 점수 {p.exam_pct}점 · 우선순위 점수 {p.priority}</div>'
                 f'<div class="bar"><i style="width:{max(0, min(100, p.exam_pct))}%"></i></div>'
                 + (f'<div class="chips" style="margin-top:6px">{chips}</div>' if chips else "")
                 + f'</div><div class="right-col">{_status_badge(p.status)}</div></div>'
             )
-    out.append('<p class="small">우선순위 점수 = 출제 가능성 × (1 − 이해도). 이해도: 앎 1.0 · 헷갈림 0.5 · 모름 0.0 · '
+    out.append('<p class="small">우선순위 점수 = 출제 점수 × (1 − 이해도). 이해도: 앎 1.0 · 헷갈림 0.5 · 모름 0.0 · '
                '진단 안 함 0.5</p>')
     return "\n".join(out)
 
@@ -199,7 +199,7 @@ def review_card(rank: int, p: PriorityRow, q: Optional[Question], g: Optional[Gr
         badges.append(f'<span class="badge kind">{_e(q.kind)}</span>')
     if g is not None and g.error_type:
         badges.append(f'<span class="badge none">{_e(g.error_type)}</span>')
-    badges.append(f'<span class="badge none">출제 {p.exam_pct}% · {_e(p.action)}</span>')
+    badges.append(f'<span class="badge none">출제 점수 {p.exam_pct} · {_e(p.action)}</span>')
     out = [f'<h3>{rank}. {_e(p.name)}</h3><div class="badges">{"".join(badges)}</div>']
     if q is not None:
         out.append(f'<p class="q">{_e(q.question)}</p>')
@@ -296,7 +296,7 @@ def _note_card(p: PriorityRow, sec: NoteSection, quotes: list[tuple[str, str]]) 
     short = sec.detail not in (DETAIL_FULL, DETAIL_MID)
     out = [f'<div class="card note{" short" if short else ""}"><h3>{_e(p.name)}<small>{_e(sec.detail)}</small></h3>',
            f'<div class="badges"><span class="badge kind">{_e(p.action)}</span>'
-           f'<span class="badge none">출제 {p.exam_pct}%</span>{_status_badge(p.status)}</div>',
+           f'<span class="badge none">출제 점수 {p.exam_pct}</span>{_status_badge(p.status)}</div>',
            _paragraphs(sec.summary)]
     if sec.key_points:
         out.append('<span class="lbl">핵심</span><ul>' + "".join(f"<li>{_with_page_chips(_e(k))}</li>"
