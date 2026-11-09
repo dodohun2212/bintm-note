@@ -164,10 +164,10 @@ AI를 부르지 않는 자동 테스트 64개(`tests/`)는 점수 계산, 우선
 
 ```bash
 python -m pytest -q tests/
-# v1.7(2026-11-09) 실행 결과: 58 passed in 1.62s. v1.8에서 6개를 더해 64개입니다.
+# v1.8(2026-11-09) GitHub Actions(Ubuntu · Python 3.12) 실행 결과: 64개 모두 통과
 ```
 
-GitHub에 올릴 때마다 GitHub Actions(`.github/workflows/tests.yml`, Ubuntu · Python 3.12)가 같은 테스트를 돌립니다.
+GitHub에 올릴 때마다 GitHub Actions(`.github/workflows/tests.yml`)가 같은 테스트를 자동으로 돌립니다.
 
 샘플 자료(가상 강의자료 20쪽 + 녹음 대본)에 심어 둔 신호와 비교한 결과(`tests/test_score.py::test_t01`): 상위 3개 = 이진 트리의 순회 · 힙의 삭제 연산 · 힙의 삽입 연산 (기대와 일치), "다음 주에 다시 봅니다"라고 미룬 BST 삭제는 최하위.
 
