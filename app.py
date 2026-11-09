@@ -13,6 +13,29 @@ from pathlib import Path
 
 import streamlit as st
 
+
+def _drop_stale_modules() -> None:
+    """배포로 core/·config.py 파일이 바뀌었으면 메모리에 있던 예전 모듈을 버리고 새로 읽게 한다 (v1.6).
+
+    Streamlit Cloud는 새 코드를 받아도 app.py만 다시 실행하고, 이미 불러온 core 모듈은 예전 것을 쓴다.
+    그러면 새로 추가한 함수를 못 찾아 ImportError가 난다. 처음 실행이거나 파일 시각이 바뀌면 모두 버린다.
+    예전 모듈의 객체를 들고 있을 수 있는 서버 공용 캐시(st.cache_resource)도 함께 비운다.
+    """
+    import sys
+    names = [n for n in sys.modules if n == "config" or n == "core" or n.startswith("core.")]
+    now = {n: os.path.getmtime(f) for n in names if (f := getattr(sys.modules[n], "__file__", None)) and os.path.exists(f)}
+    seen = getattr(sys, "_bintm_mtimes", None)
+    if seen is not None and all(seen.get(n, t) == t for n, t in now.items()):
+        return
+    if seen is not None or names:
+        for n in names:
+            del sys.modules[n]
+        st.cache_resource.clear()
+    sys._bintm_mtimes = None   # 아래에서 새로 불러온 뒤 기록한다
+
+
+_drop_stale_modules()
+
 from config import (AUTO_EXPLAIN_TOP, CONFUSION_MAX_CHARS, DIAG_MIN_PCT, ESSAY_MIN_PCT, LLM_MODEL,
                     MAX_ANALYSES_PER_DAY, MAX_ANALYSES_PER_SESSION, MAX_AUDIO_MB, MAX_MATERIAL_MB, MAX_PAGES,
                     QUICK_DIAG_TOP, STT_MODEL)
@@ -37,6 +60,15 @@ from core.schemas import (DETAIL_FULL, DETAIL_MID, DETAIL_SHORT, STATUS_KNOWN, S
 from core.score import UTTERANCE_LABELS, WEIGHTS_VERSION, compute_scores
 from core.stt import STTError
 from core.utterances import find_utterances
+
+
+def _record_module_mtimes() -> None:
+    import sys
+    sys._bintm_mtimes = {n: os.path.getmtime(m.__file__) for n, m in list(sys.modules.items())
+                         if (n == "config" or n.startswith("core.")) and getattr(m, "__file__", None)}
+
+
+_record_module_mtimes()
 
 ROOT = Path(__file__).resolve().parent
 SAMPLE_PDF = ROOT / "samples" / "자료구조_8장_트리와힙_가상강의자료.pdf"
