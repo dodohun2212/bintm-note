@@ -124,3 +124,18 @@ def test_empty_answer_reasons_differ():
     from core.diagnose import REASON_BLANK, REASON_DONT_KNOW, empty_grading
     assert empty_grading().reason == REASON_BLANK and "비워" in REASON_BLANK
     assert "모르겠어요" in empty_grading(REASON_DONT_KNOW).reason
+
+
+def test_example_answers_cover_every_state_and_are_answered():
+    from core.diagnose import EXAMPLE_CONFUSION, example_answers, is_answered
+    essay = Question(question="q", answer="첫 문장이다. 둘째 문장이다.", kind=QTYPE_ESSAY)
+    qs = [essay, _mcq(2), essay, _mcq(2), essay, _mcq(2)]
+    ex = example_answers(qs)
+    assert [e.get("answer") for e in ex[0::2]] == ["첫 문장이다. 둘째 문장이다.", "첫 문장이다.", ""]
+    assert ex[4]["dont_know"] is True
+    assert [(e["choice"], e["guessed"]) for e in ex[1::2]] == [(2, False), (2, True), (3, False)]
+    assert ex[3]["confusion"] == EXAMPLE_CONFUSION
+    grades = [grade_mcq(q, e["choice"], e["guessed"]).status for q, e in zip(qs[1::2], ex[1::2])]
+    assert grades == ["앎", "헷갈림", "모름"]
+    for q, e in zip(qs, ex):
+        assert is_answered(q, e.get("choice"), e.get("answer", ""), e.get("dont_know", False))

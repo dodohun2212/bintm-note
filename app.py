@@ -19,8 +19,8 @@ from config import (AUTO_EXPLAIN_TOP, CONFUSION_MAX_CHARS, DIAG_MIN_PCT, ESSAY_M
 from core import stt
 from core.concepts import NoConceptsError, extract_concepts
 from core.diagnose import (CIRCLED, MODE_MIX, QUESTION_MODES, REASON_BLANK, REASON_DONT_KNOW, diag_targets,
-                           empty_grading, grade_answer, grade_mcq, is_answered, make_question, mcq_answer_text,
-                           question_kind)
+                           empty_grading, example_answers, grade_answer, grade_mcq, is_answered, make_question,
+                           mcq_answer_text, question_kind)
 from core.explain import explain
 from core.export import notes_html, study_html
 from core.extract import (SUPPORTED_AUDIO, SUPPORTED_MATERIAL, ExtractError, extract_material, file_ext, is_scanned,
@@ -635,33 +635,35 @@ def _make_questions(ids: list[str]) -> None:
 
 def _is_answered(cid: str, q: Question) -> bool:
     """화면 입력칸의 지금 값으로 판단한다 (객관식: 보기나 '모르겠어요', 서술형: 답이나 '모르겠어요')."""
-    return is_answered(q, st.session_state.get(f"mcq_{cid}"), str(st.session_state.get(f"ans_{cid}") or ""),
-                       bool(st.session_state.get(f"dk_{cid}")))
+    ss = st.session_state   # 입력칸이 아직 안 그려졌으면(예시 답 채우기 직후) 저장된 값을 본다
+    return is_answered(q, ss.get(f"mcq_{cid}", ss.mcq_choice.get(cid)),
+                       str(ss.get(f"ans_{cid}", ss.answers.get(cid)) or ""),
+                       bool(ss.get(f"dk_{cid}", ss.dont_know.get(cid))))
 
 
 def _essay_input(cid: str) -> None:
     st.session_state.answers[cid] = st.text_area(
-        "내 답", key=f"ans_{cid}", height=120, value=st.session_state.answers.get(cid, ""),
+        "내 답", key=f"ans_{cid}", height=120, **_initial(f"ans_{cid}", value=st.session_state.answers.get(cid, "")),
         placeholder="아는 만큼 2~5문장으로 적어 주세요.", label_visibility="collapsed")
     st.session_state.dont_know[cid] = st.checkbox("모르겠어요", key=f"dk_{cid}",
-                                                  value=st.session_state.dont_know.get(cid, False))
+                                                  **_initial(f"dk_{cid}", value=st.session_state.dont_know.get(cid, False)))
 
 
 def _mcq_input(cid: str, q: Question) -> None:
     options = list(range(len(q.choices))) + [-1]
     prev = st.session_state.mcq_choice.get(cid)
     choice = st.radio("답 고르기", options, key=f"mcq_{cid}", label_visibility="collapsed",
-                      index=options.index(prev) if prev in options else None,
+                      **_initial(f"mcq_{cid}", index=options.index(prev) if prev in options else None),
                       format_func=lambda i: "모르겠어요" if i == -1 else f"{CIRCLED[i]} {q.choices[i]}")
     st.session_state.mcq_choice[cid] = choice
     if choice is not None and choice >= 0:
         guessed = st.checkbox("확신 없이 골랐어요 (찍었어요)", key=f"guess_{cid}",
-                              value=st.session_state.guessed.get(cid, False))
+                              **_initial(f"guess_{cid}", value=st.session_state.guessed.get(cid, False)))
         st.session_state.guessed[cid] = guessed
         if guessed:   # 설문의 '기타'처럼, 체크하면 아래에 입력칸이 생긴다 (v1.4). 비워 둬도 채점한다
             st.session_state.confusion[cid] = st.text_area(
                 "어떤 점이 헷갈렸나요? (선택)", key=f"conf_{cid}", height=80, max_chars=CONFUSION_MAX_CHARS,
-                value=st.session_state.confusion.get(cid, ""),
+                **_initial(f"conf_{cid}", value=st.session_state.confusion.get(cid, "")),
                 placeholder="예: ②와 ③ 중에 고민했어요. 두 방법이 어떻게 다른지 모르겠어요.",
                 help="적어 주면 ④ 결과의 보완 설명에서 이 부분을 콕 집어 답해요. 비워 둬도 채점돼요.")
     else:
@@ -696,6 +698,25 @@ def _result_view(cid: str, q: Question, g: Grading) -> None:
                          for it, sc in zip(q.rubric, g.rubric_scores or [None] * len(q.rubric)))
         show(f"<div>{h(q.answer)}</div><ul>{rubric}</ul>"
              f'<div class="bt-pages">근거: {h(", ".join(f"p.{p}" for p in q.source_pages))}</div>')
+
+
+def _fill_examples(cids: list[str]) -> None:
+    """샘플 체험용 예시 답을 입력칸에 넣는다 (v1.6). 입력칸이 그려지기 전에 불러야 한다."""
+    ss, qs = st.session_state, st.session_state.questions
+    for cid, ex in zip(cids, example_answers([qs[cid] for cid in cids])):
+        if qs[cid].is_mcq:
+            ss[f"mcq_{cid}"] = ss.mcq_choice[cid] = ex["choice"]
+            ss[f"guess_{cid}"] = ss.guessed[cid] = ex["guessed"]
+            ss[f"conf_{cid}"] = ss.confusion[cid] = ex["confusion"]
+        else:
+            ss[f"ans_{cid}"] = ss.answers[cid] = ex["answer"]
+            ss[f"dk_{cid}"] = ss.dont_know[cid] = ex["dont_know"]
+    ss.show_missing = False
+
+
+def _initial(key: str, **default) -> dict:
+    """입력칸 상태가 이미 있으면 기본값을 넘기지 않는다 (두 번 정하면 Streamlit이 경고를 남긴다)."""
+    return {} if key in st.session_state else default
 
 
 def screen_s03() -> None:
@@ -735,6 +756,13 @@ def screen_s03() -> None:
         n_mcq = sum(1 for cid in shown if questions[cid].is_mcq)
         done = sum(1 for cid in shown if _is_answered(cid, questions[cid]))
         st.progress(done / max(1, len(shown)), text=f"답한 문제 {done} / {len(shown)} · 객관식 {n_mcq} · 서술형 {len(shown) - n_mcq}")
+        if st.session_state.from_sample and done < len(shown):
+            if st.button("예시 답 채우기 (샘플 체험용)", width="stretch",
+                         help="정답·반쯤 맞은 답·찍은 답·'모르겠어요'를 섞어 모든 문제를 채워요. 채점은 그대로 "
+                              "객관식은 코드, 서술형은 AI가 해요. 채운 뒤 답을 고쳐도 돼요."):
+                _fill_examples(shown)
+                st.rerun()
+            st.caption("샘플로 둘러보는 중이라면 '예시 답 채우기'로 바로 채점까지 가 볼 수 있어요.")
 
     number = {cid: i for i, cid in enumerate(shown, start=1)}
     for cid in shown:

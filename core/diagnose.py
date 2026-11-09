@@ -217,6 +217,43 @@ def empty_grading(reason: str = REASON_BLANK) -> Grading:
     return Grading(score=0, max=10, rubric_scores=[], status=STATUS_UNKNOWN, error_type="무응답", reason=reason)
 
 
+EXAMPLE_CONFUSION = "두 보기 사이에서 고민했어요. 둘이 어떻게 다른지 모르겠어요."
+
+
+def _first_sentence(text: str) -> str:
+    parts = re.split(r"(?<=[.!?。])\s+", (text or "").strip(), maxsplit=1)
+    return parts[0]
+
+
+def example_answers(questions: Sequence[Question]) -> list[dict]:
+    """샘플 체험용 예시 답 (v1.6). 문제를 다 풀지 않아도 채점과 ④ 결과를 볼 수 있게 한다.
+
+    앎·헷갈림·모름이 골고루 나오도록 순서대로 돌려 가며 채운다. 채점은 그대로 코드(객관식)와 AI(서술형)가 한다.
+    서술형: 모범 답안 전체 → 모범 답안 첫 문장만 → '모르겠어요'
+    객관식: 확신하고 정답 → 찍어서 정답(헷갈린 점 적음) → 오답
+    """
+    out, n_essay, n_mcq = [], 0, 0
+    for q in questions:
+        if q.is_mcq:
+            k, n_mcq = n_mcq % 3, n_mcq + 1
+            right = q.answer_index or 0
+            if k == 0:
+                out.append(dict(choice=right, guessed=False, confusion=""))
+            elif k == 1:
+                out.append(dict(choice=right, guessed=True, confusion=EXAMPLE_CONFUSION))
+            else:
+                out.append(dict(choice=(right + 1) % max(1, len(q.choices)), guessed=False, confusion=""))
+        else:
+            k, n_essay = n_essay % 3, n_essay + 1
+            if k == 0:
+                out.append(dict(answer=q.answer, dont_know=False))
+            elif k == 1:
+                out.append(dict(answer=_first_sentence(q.answer), dont_know=False))
+            else:
+                out.append(dict(answer="", dont_know=True))
+    return out
+
+
 def question_for_prompt(question: Question) -> dict:
     """채점·설명 프롬프트에 넣을 문제. 그림은 글로 바꿔 넣는다."""
     d = question.model_dump(exclude={"figure"})

@@ -5,20 +5,22 @@
 - 배포 URL: https://bintm-note-zeclhcenmubbwjrsrz5bqt.streamlit.app
 - 저장소: https://github.com/dodohun2212/bintm-note
 - KOREATECH AI 실습형 이벤트 · Build for Students · 2026-11-11
+- 개발 일정: 행사 전인 2026-11-06~11-09에 만들었고, 그 과정은 커밋 기록과 [CHANGELOG.md](CHANGELOG.md)에 그대로 남아 있습니다.
 
 ## 요약 · Summary
 
 - **문제**: 시험 전 자료는 많은데 어디부터 볼지 모릅니다. 교수님이 "이건 꼭 알아두세요"라고 한 말은 녹음 속에 묻혀 있고, 안다고 생각한 것과 실제로 아는 것은 다릅니다.
 - **누구를 위해**: 강의자료(PDF/PPTX)와 수업 녹음(또는 대본)으로 시험을 준비하는 대학생.
 - **어떻게**: 자료와 녹음에서 출제 신호를 찾아 개념별 **출제 가능성**을 매기고(규칙 기반, 코드가 계산), 개념마다 **진단 문제**(객관식·서술형, 트리·배열 그림 포함)로 실제 이해도를 확인합니다. 그다음 **출제 가능성 × 모르는 정도**로 공부 순서를 정하고, 자료 쪽 번호를 인용한 오답노트와 시험 대비 요약 노트를 만들어 줍니다.
-- **바로 써 보기**: 배포 URL에서 **"샘플 자료로 체험하기"**를 누르면 키나 파일 없이 전체 흐름을 볼 수 있습니다(출제 순위 → 진단 10문제 → 공부 순서·오답노트·요약 노트 내려받기). AI를 기다리는 시간은 모두 합쳐 약 1분 15초입니다(2026-11-09 배포 앱 실측: 분석 1초 미만 + 문제 25초 + 채점 15초 + 보완 설명·요약 노트 34초). 샘플 분석 결과는 서버에 저장돼 있어 바로 끝나고, 서버가 다시 켜진 뒤 처음 한 번만 약 55초 걸립니다. 문제를 푸는 시간은 따로 듭니다.
+- **바로 써 보기**: 배포 URL에서 **"샘플 자료로 체험하기"**를 누르면 키나 파일 없이 전체 흐름을 볼 수 있습니다(출제 순위 → 진단 10~12문제 → 공부 순서·오답노트·요약 노트 내려받기). 문제를 다 풀 시간이 없으면 ③의 **"예시 답 채우기"**(샘플 전용)를 누르면 정답·반쯤 맞은 답·찍은 답·'모르겠어요'가 섞여 채워지고, 바로 채점과 ④ 결과까지 볼 수 있습니다. AI를 기다리는 시간은 모두 합쳐 약 1분 15초입니다(2026-11-09 배포 앱 실측: 분석 1초 미만 + 문제 25초 + 채점 15초 + 보완 설명·요약 노트 34초). 샘플 분석 결과는 서버에 저장돼 있어 바로 끝나고, 서버가 다시 켜진 뒤 처음 한 번만 약 55초 걸립니다. 문제를 푸는 시간은 따로 듭니다.
 
 **English**
 
 - **Problem**: Before an exam, students have more material than time. The professor's "this will be on the test" remarks are buried in hours of lecture recordings, and what students *think* they know often differs from what they actually know.
 - **Who it's for**: University students preparing for exams with lecture slides (PDF/PPTX) and class recordings or transcripts.
 - **How it works**: BintmNote ("gap notes") scores each concept's exam likelihood from signals in the slides (learning objectives, pages, examples, exercises) and the professor's emphasis in the recording. The scoring is rule-based and computed in code. It then checks real understanding with one auto-generated diagnostic question per concept: multiple-choice or short-answer, with drawn trees and arrays, plus an "I guessed" confidence check. Finally it ranks study priority = exam likelihood × (1 − understanding) and writes page-cited review notes and an exam summary sheet.
-- **Try it**: Open the live app and click **"샘플 자료로 체험하기" (Try with sample material)**. No API key or file is needed. Total AI wait time is about 75 seconds (measured on the live app on 2026-11-09: analysis under 1 s because the sample result is cached on the server, questions 25 s, grading 15 s, review notes 34 s), plus the time you spend answering the 10 questions. The first sample run after a server restart takes about 55 s longer.
+- **Try it**: Open the live app and click **"샘플 자료로 체험하기" (Try with sample material)**. No API key or file is needed. Total AI wait time is about 75 seconds (measured on the live app on 2026-11-09: analysis under 1 s because the sample result is cached on the server, questions 25 s, grading 15 s, review notes 34 s), plus the time you spend answering the 10–12 questions. Short on time? Click **"예시 답 채우기" (Fill example answers)** on the diagnosis screen: it fills a mix of correct, partial, guessed and "I don't know" answers so you can go straight to grading and the study plan. The first sample run after a server restart takes about 55 s longer.
+- **Timeline**: Built before the event (2026-11-06 to 11-09); the full history is in the commit log and [CHANGELOG.md](CHANGELOG.md).
 
 ![샘플 자료로 체험하기 흐름 (배포 앱, 실제 AI, 2026-11-09)](docs/스크린샷/demo.gif)
 
@@ -150,26 +152,16 @@ BINTM_FAKE_AI=1 streamlit run app.py
 
 ## 테스트
 
-AI를 부르지 않는 자동 테스트 56개(`tests/`)는 점수 계산, 우선순위, 상태 판정, 텍스트 추출, 마스킹, 인용·페이지 검사, 객관식(응답 검사·보기 섞기·확신도 채점·서술형 대체), 진단 대상 고르기, 문제 겹침 방지용 다른 개념 목록, 답이 없을 때 채점 이유, 문제 그림(검사·그리기·그림을 가리키는 문제 다시 만들기), 원본 페이지 그림, 요약 노트(자세한 정도·강의 순서·짧게는 AI 호출 없음), 부분 점수 채점, 모든 문제에 답해야 채점, 잘린 답 다시 받기, 헷갈린 점(프롬프트에 데이터로 넣기·답 표시), 두 내려받기 파일(글 이스케이프, 페이지 그림 없음), API 비용 보호(세션·하루 분석 횟수, 날짜 바뀜, 동시 사용, 결과 재사용), 빠른 진단 대상 고르기, 호출 수 세기, 전체 흐름을 확인합니다.
+AI를 부르지 않는 자동 테스트 57개(`tests/`)는 점수 계산, 우선순위, 상태 판정, 텍스트 추출, 마스킹, 인용·페이지 검사, 객관식(응답 검사·보기 섞기·확신도 채점·서술형 대체), 진단 대상 고르기, 문제 겹침 방지용 다른 개념 목록, 답이 없을 때 채점 이유, 문제 그림(검사·그리기·그림을 가리키는 문제 다시 만들기), 원본 페이지 그림, 요약 노트(자세한 정도·강의 순서·짧게는 AI 호출 없음), 부분 점수 채점, 모든 문제에 답해야 채점, 잘린 답 다시 받기, 헷갈린 점(프롬프트에 데이터로 넣기·답 표시), 두 내려받기 파일(글 이스케이프, 페이지 그림 없음), API 비용 보호(세션·하루 분석 횟수, 날짜 바뀜, 동시 사용, 결과 재사용), 빠른 진단 대상 고르기, 샘플 체험용 예시 답(앎·헷갈림·모름이 모두 나오는지), 호출 수 세기, 전체 흐름을 확인합니다.
 
 ```bash
 python -m pytest -q tests/
-# 2026-11-09 실행 결과: 56 passed in 1.91s
+# 2026-11-09 실행 결과: 57 passed in 1.73s
 ```
 
 샘플 자료(가상 강의자료 20쪽 + 녹음 대본)에 심어 둔 신호와 비교한 결과(`tests/test_score.py::test_t01`): 상위 3개 = 이진 트리의 순회 · 힙의 삭제 연산 · 힙의 삽입 연산 (기대와 일치), "다음 주에 다시 봅니다"라고 미룬 BST 삭제는 최하위.
 
-실제 AI(키 연결)로 샘플 자료를 한 바퀴 돌린 결과(2026-11-07, 객관식 추가 전 버전): 상위 3개 = 힙의 삽입 연산 100% · 이진 트리 순회 87% · 힙의 삭제 연산 87%, 미룬 BST 삭제 0%로 최하위. 서술형 채점은 빠뜨린 정지 조건을 자료 쪽(p.15, p.17)을 들어 감점했고, 보완 설명은 문장마다 (p.n)을 붙였으며 자료에 없는 내용은 "찾지 못함"으로 표시했습니다.
-
-객관식을 넣은 v1.1로 다시 한 바퀴 돌린 결과(2026-11-07, 배포 앱, 실제 AI): 개념 14개 중 출제 가능성 20% 이상 10개를 진단했고(서술형 6, 객관식 4), 상위 3개는 힙의 삽입 연산 100% · 힙의 삭제 연산 88% · 이진 트리 순회 80%였습니다. 일부러 맞는 답, 반쯤 맞는 답, 틀린 답을 넣자 각각 앎 10/10, 헷갈림 6/10, 모름 0/10(개념 혼동)으로 채점됐습니다. 객관식 4문제는 모두 보기 4개에 정답 1개, 해설에 쪽 번호가 있었고 정답 위치는 ③②①③으로 흩어졌습니다. 이때 두 객관식이 같은 배열의 같은 인덱스 계산을 묻는 겹침을 발견해 위의 "다른 개념 목록"을 추가했습니다. 이 수정 뒤 2026-11-09 배포 앱에서 다시 확인했을 때, 객관식 4문제는 서브트리·단말 노드, 배열 인덱스로 부모 찾기, 최대 힙 조건, 이진 탐색 트리 조건을 각각 물어 겹치지 않았습니다.
-
-v1.2(2026-11-08)는 사용해 본 학생의 피드백("문제에 그림·표가 없고 어디를 참고하라고만 나온다", "오답노트뿐 아니라 강의 전체 요약이 있고, 중요한 곳은 더 자세했으면 좋겠다")을 반영했습니다. 2026-11-09 배포 앱에서 실제 AI로 확인한 결과: 진단 10문제 중 9문제에 트리 그림이나 배열 표가 문제 안에 그려졌고, "p.9 그림 참고"처럼 학생이 볼 수 없는 것을 가리키는 문제는 없었습니다. 시험 대비 요약 노트는 13개 개념을 강의 순서대로 정리했습니다(자세히 8 · 짧게 5). 원본 페이지 그림은 "강의자료 원본 보기" 칸이 나오는 것까지만 보고 펼쳐 보지 않았습니다(실제 AI 확인 아직).
-
-v1.3(2026-11-08)은 다시 써 본 학생이 말한 불편 네 가지를 고쳤습니다. ① 답을 고르지 않아도 채점됨 → 모든 문제에 답해야 채점. ② 고르지 않으면 자동으로 "모름" 처리 → 객관식에 "모르겠어요" 보기를 항상 두고 직접 고르게 함. ③ 결과 파일 하나에 다 들어 있고 진단 결과와 오답노트가 겹침 → 공부 순서·오답노트 파일과 요약 노트 파일로 나누고, 진단 결과와 보완 설명을 오답노트 한 장으로 합침. 내려받는 파일에서 원본 페이지 그림은 뺌. ④ 서술형이 채점됐는지 알 수 없음 → 원인은 AI가 준 부분 점수(예: 2.5)를 형식 검사가 받아들이지 못해 채점 전체가 멈춘 것이었고, 부분 점수를 받아들이게 고친 뒤 실패한 문제는 표시하고 다시 채점하게 함. 2026-11-09 배포 앱에서 실제 AI로 확인한 결과: 첫 문제를 비워 두고 채점을 누르자 채점하지 않고 그 문제 아래에 빨간 글씨가 나왔습니다. 모든 문제에 답하자 15초 만에 채점됐고(서술형 5문제를 AI가 채점, 실패 0), 3·5·7·9점 같은 부분 점수가 쪽 번호와 함께 나왔습니다(결과 앎 3 · 헷갈림 2 · 모름 5). 내려받기 두 개(공부 순서·오답노트 66.9KB, 요약 노트 32.2KB)도 브라우저에서 열렸습니다.
-
-v1.4(2026-11-08)는 "찍었을 때 무엇이 헷갈렸는지 직접 적으면 그 부분을 더 자세히 알려 줄 수 있지 않을까"라는 의견을 반영했습니다. 전에는 보완 설명 AI가 "확신 없이 고름"이라는 사실만 알아서, 학생이 어디서 헷갈렸는지 짐작해 설명했습니다. 이제 "확신 없이 골랐어요"를 체크하면 설문의 "기타"처럼 입력칸이 생기고, 적은 내용에 ④ 보완 설명과 내려받는 오답노트에서 바로 답합니다. 2026-11-09 배포 앱에서 실제 AI로 확인한 결과: 배열 표현 문제에서 찍고 "부모 인덱스를 i/2에서 내림하는지 올림하는지 헷갈렸어요"라고 적자, ④에 "내가 헷갈린 점에 대한 답"이 붙었습니다. 답은 자료의 표기가 `i // 2`라는 점을 p.7을 들어 설명했고, 자료에 없는 부분(`//`가 내림이라는 설명)은 "올린 자료에서 찾지 못함"으로 따로 표시했습니다.
-
-v1.5(2026-11-09)는 심사·체험으로 사람이 한꺼번에 몰릴 때를 대비했습니다. 배포 앱은 운영자 키 하나로 누구나 쓰므로 세션당 분석 5번, 서버 전체 하루 150번으로 제한했고, 샘플 자료의 진단 문제는 한 번 만들면 다시 씁니다. ⑤ 화면의 AI 호출 수가 묶음 단위로 세지던 버그와, 저장된 결과를 다시 쓸 때도 토큰을 더하던 문제를 고쳤습니다. 녹음 업로더에 Streamlit 기본 문구 "30MB per file"이 보여 안내(25MB)와 달랐던 것은 업로더별 상한을 25MB로 걸어 맞췄고, 보완 설명의 "올린 자료에서 찾지 못함"은 오류가 아니므로 오류 코드(E-12) 표기를 뺐습니다. 진단 10문제를 모두 풀어야 채점되는 흐름이 길 수 있어 출제 가능성 상위 5개만 푸는 **빠른 진단**을 선택지로 넣었습니다(기본은 꺼짐). 자동 테스트와 가짜 AI 모드로 확인했습니다. 배포 앱에는 main에 합친 뒤 반영되며, 그 뒤 실제 AI 확인은 아직입니다.
+버전별로 실제 AI로 확인한 결과와 학생 피드백을 반영한 기록은 [CHANGELOG.md](CHANGELOG.md)에 있습니다.
 
 ### 측정값
 
