@@ -7,11 +7,20 @@ from typing import Optional
 
 from config import AI_MAX_TOKENS, CONFUSION_MAX_CHARS
 from core import prompts
-from core.diagnose import CIRCLED
+from core.diagnose import CIRCLED, REASON_BLANK, REASON_DONT_KNOW, REASON_NOT_PICKED
 from core.figure import figure_text
 from core.extract import evidence_pages, pages_to_text
 from core.llm import Usage, ask_json
 from core.schemas import STATUS_NOT_DIAGNOSED, Concept, Explanation, Grading, Material, Question
+
+NOT_CHECKED_GAP = "아직 확인하지 않은 개념이다."
+# 답을 하지 않은 경우(채점 이유) → '내가 놓친 점'에 쓸 말
+NO_ANSWER_GAPS = {
+    REASON_DONT_KNOW: "'모르겠어요'를 골라 이 문제에서 묻는 내용을 아직 답하지 못했다.",
+    REASON_BLANK: "답을 비워 두어 이 문제에서 묻는 내용을 아직 답하지 못했다.",
+    REASON_NOT_PICKED: "보기를 고르지 않아 이 문제에서 묻는 내용을 아직 답하지 못했다.",
+}
+OTHER_GAP = "진단 문제에서 틀리거나 빠뜨린 부분이 있다."
 
 
 def _diagnosis_json(status: str, question: Optional[Question], answer: Optional[str], grading: Optional[Grading]) -> str:
@@ -46,6 +55,22 @@ def clean_confusion(text: Optional[str]) -> str:
     return t.replace("<", "‹").replace(">", "›")
 
 
+def fix_gap(gap: str, status: str, grading: Optional[Grading]) -> str:
+    """'내가 놓친 점'을 진단 결과와 맞춘다 (v1.8).
+
+    AI가 진단한 개념에 '아직 확인하지 않은 개념'(진단 안 함일 때 쓰는 말)을 쓰거나 비워 두면 코드가 대신 채운다.
+    진단 안 함이면 AI 답과 상관없이 정해진 말을 쓴다. 나머지는 AI가 쓴 구체적인 문장을 그대로 둔다.
+    """
+    gap = (gap or "").strip()
+    if status == STATUS_NOT_DIAGNOSED:
+        return NOT_CHECKED_GAP
+    if gap and "확인하지 않은" not in gap:
+        return gap
+    if grading is not None and grading.reason in NO_ANSWER_GAPS:
+        return NO_ANSWER_GAPS[grading.reason]
+    return OTHER_GAP
+
+
 def explain(concept: Concept, material: Material, meta_pages: set[int], status: str = STATUS_NOT_DIAGNOSED,
             question: Optional[Question] = None, answer: Optional[str] = None, grading: Optional[Grading] = None,
             usage: Optional[Usage] = None, confusion: str = "") -> Explanation:
@@ -64,6 +89,7 @@ def explain(concept: Concept, material: Material, meta_pages: set[int], status: 
     allowed = set(pages)
     reply = (e.confusion_reply or "").strip()
     return e.model_copy(update={
+        "my_gap": fix_gap(e.my_gap, status, grading),
         "source_pages": [p for p in e.source_pages if p in allowed],
         "check_pages": [p for p in e.check_pages if p in allowed][:4],
         "confusion_reply": reply if confusion and reply else None,   # 적은 게 없으면 답도 버린다

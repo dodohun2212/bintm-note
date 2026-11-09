@@ -7,7 +7,7 @@ from typing import Optional
 from core import prompts
 from core.extract import meta_pages_heuristic, pages_to_text
 from core.llm import Usage, ask_json
-from core.schemas import Concept, ConceptsResult, Material
+from core.schemas import Concept, ConceptsResult, Material, keep_valid
 
 
 class NoConceptsError(Exception):
@@ -27,8 +27,12 @@ def _clamp_pages(pages: list, n_pages: int) -> list[int]:
 
 
 def validate_concepts(raw: dict, material: Material) -> ConceptsResult:
-    """AI 결과를 6.2 형식으로 검사: 페이지 범위, id 중복, 이름 중복, meta_pages 보정."""
-    result = ConceptsResult.model_validate(raw)
+    """AI 결과를 6.2 형식으로 검사: 페이지 범위, id 중복, 이름 중복, meta_pages 보정.
+
+    형식이 틀린 개념은 그 개념만 버리고 나머지로 계속한다 (v1.8). 쓸 개념이 하나도 없으면 NoConceptsError(E-09).
+    """
+    raw = raw if isinstance(raw, dict) else {}
+    result = ConceptsResult.model_validate({**raw, "concepts": keep_valid(Concept, raw.get("concepts"))})
     seen_ids: set[str] = set()
     seen_names: set[str] = set()
     cleaned: list[Concept] = []

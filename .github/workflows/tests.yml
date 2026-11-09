@@ -1,0 +1,23 @@
+# 자동 테스트 (AI를 부르지 않음). main에 올리거나 PR을 열 때마다 GitHub 서버에서 돌린다.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    env:
+      BINTM_FAKE_AI: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q tests/

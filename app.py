@@ -47,7 +47,7 @@ from core.diagnose import (CIRCLED, MODE_MIX, QUESTION_MODES, REASON_BLANK, REAS
 from core.explain import explain
 from core.export import notes_html, study_html
 from core.extract import (SUPPORTED_AUDIO, SUPPORTED_MATERIAL, ExtractError, extract_material, file_ext, is_scanned,
-                          run_id)
+                          mask_pii, run_id)
 from core.figure import FIGURE_CSS, figure_html
 from core.guard import DailyCounter, ResultCache, session_left
 from core.llm import LLMError, LLMJsonError, LLMKeyError, Usage, fake_mode, has_key
@@ -149,6 +149,12 @@ h1 {word-break: keep-all;}
 .bt-note ul {margin: 2px 0 8px; padding-left: 1.3rem;}
 .bt-quote {font-size: .95rem; color: #6e7781; margin: 2px 0;}
 .bt-miss {color: #cf222e; font-weight: 700; font-size: .95rem; margin: 6px 0 2px;}
+/* AI를 기다리는 동안의 "…만드는 중" 안내는 화면 맨 위에 생겨서, 버튼을 누르려고 아래로 내려 둔 사람은 못 봤다.
+   어디까지 내려 있든 보이게 화면 아래 가운데에 띄운다 (v1.8). */
+[data-testid="stSpinner"] {position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 1000;
+  background: #2563eb; padding: 10px 18px; border-radius: 999px; box-shadow: 0 4px 16px rgba(0,0,0,.2);
+  max-width: calc(100vw - 32px); width: max-content;}
+[data-testid="stSpinner"], [data-testid="stSpinner"] * {color: #fff !important;}
 """ + FIGURE_CSS + """
 </style>
 """
@@ -428,6 +434,8 @@ def run_analysis(material_bytes: bytes, material_name: str, audio_bytes: bytes |
                 except STTError as e:
                     st.warning(error_message(e))
                     st.session_state.errors.append(str(e))
+            if transcript:
+                transcript = mask_pii(transcript)   # 대본도 강의자료처럼 AI에 보내기 전에 가린다 (v1.8)
 
             status.update(label="개념 찾는 중")
             concepts_json, _ = call_cached(cached_concepts, rid, material.model_dump_json())
@@ -505,7 +513,8 @@ def screen_s01() -> None:
     with b2:
         sample = st.button("샘플 자료로 체험하기", disabled=not has_key(), width="stretch",
                            help="우리가 만든 가상 강의자료(자료구조 8장, 20쪽)와 녹음 대본으로 바로 돌려 봅니다.")
-    st.caption(NOTICE + " 올린 자료와 녹음은 분석을 위해 AI 제공사(Anthropic, OpenAI) 서버로 전송되고, 이 앱의 서버에는 저장하지 않아요.")
+    st.caption(NOTICE + " 올린 자료와 녹음은 분석을 위해 AI 제공사(Anthropic, OpenAI) 서버로 전송돼요. 이 앱은 파일을 디스크에 "
+               "저장하지 않고, 같은 파일을 다시 분석할 때를 위해 분석 결과만 서버가 켜져 있는 동안 메모리에 보관해요.")
     left = session_left(st.session_state.analyses_used, MAX_ANALYSES_PER_SESSION)
     if 0 <= left <= 2:
         st.caption(f"이 화면에서 분석은 {left}번 더 할 수 있어요 (모두가 함께 쓰는 AI 사용량을 아끼기 위한 제한).")
@@ -1204,8 +1213,10 @@ def screen_s05() -> None:
 **주의**
 - 출제를 보장하지 않습니다. 공부 우선순위를 정하는 참고용입니다.
 - 녹음은 교수님 허락을 받은 것만, 개인 학습 목적으로만 올려 주세요.
-- 올린 파일은 이 앱의 서버에 저장하지 않습니다. 분석을 위해 AI 제공사(Anthropic, OpenAI) 서버로 전송됩니다.
-- 학번·전화번호·이메일은 AI에 보내기 전에 가립니다.
+- 올린 파일은 이 앱 서버의 디스크에 저장하지 않습니다. 분석을 위해 AI 제공사(Anthropic, OpenAI) 서버로 전송됩니다.
+- 같은 파일을 다시 분석할 때 AI를 또 부르지 않도록, 분석 결과(개념 목록·교수님 강조)와 강의자료 쪽 그림은 서버가 켜져 있는
+  동안 서버 메모리에 보관합니다. 같은 파일을 올렸을 때만 다시 쓰고, 서버가 다시 켜지면 사라집니다.
+- 학번·전화번호·이메일은 강의자료와 녹음 대본 모두 AI에 보내기 전에 가립니다.
 """
     )
     st.subheader("현재 설정", anchor=False)
