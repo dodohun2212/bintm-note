@@ -5,7 +5,6 @@
 - 배포 URL: https://bintm-note-zeclhcenmubbwjrsrz5bqt.streamlit.app
 - 저장소: https://github.com/dodohun2212/bintm-note
 - KOREATECH AI 실습형 이벤트 · Build for Students · 2026-11-11
-- 개발 일정: 행사 전인 2026-11-06~11-09에 만들었고, 그 과정은 커밋 기록과 [CHANGELOG.md](CHANGELOG.md)에 그대로 남아 있습니다.
 
 ## 요약 · Summary
 
@@ -20,7 +19,6 @@
 - **Who it's for**: University students preparing for exams with lecture slides (PDF/PPTX) and class recordings or transcripts.
 - **How it works**: BintmNote ("gap notes") scores each concept's exam likelihood from signals in the slides (learning objectives, pages, examples, exercises) and the professor's emphasis in the recording. The scoring is rule-based and computed in code. It then checks real understanding with one auto-generated diagnostic question per concept: multiple-choice or short-answer, with drawn trees and arrays, plus an "I guessed" confidence check. Finally it ranks study priority = exam likelihood × (1 − understanding) and writes page-cited review notes and an exam summary sheet.
 - **Try it**: Open the live app and click **"샘플 자료로 체험하기" (Try with sample material)**. No API key or file is needed. Total AI wait time is about 75 seconds (measured on the live app on 2026-11-09: analysis under 1 s because the sample result is cached on the server, questions 25 s, grading 15 s, review notes 34 s), plus the time you spend answering the 10–12 questions. Short on time? Click **"예시 답 채우기" (Fill example answers)** on the diagnosis screen: it fills a mix of correct, partial, guessed and "I don't know" answers so you can go straight to grading and the study plan. The first sample run after a server restart takes about 55 s longer.
-- **Timeline**: Built before the event (2026-11-06 to 11-09); the full history is in the commit log and [CHANGELOG.md](CHANGELOG.md).
 
 ![샘플 자료로 체험하기 흐름 (배포 앱, 실제 AI, 2026-11-09)](docs/스크린샷/demo.gif)
 
