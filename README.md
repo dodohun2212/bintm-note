@@ -160,7 +160,7 @@ AI를 부르지 않는 자동 테스트 66개(`tests/`)가 점수·우선순위�
 
 ```bash
 python -m pytest -q tests/
-# 2026-11-09 GitHub Actions(Ubuntu · Python 3.12) 실행 결과: 64개 모두 통과
+# 2026-11-09 GitHub Actions(Ubuntu · Python 3.12) 실행 결과: 66개 모두 통과
 ```
 
 GitHub에 올릴 때마다 GitHub Actions(`.github/workflows/tests.yml`)가 같은 테스트를 자동으로 돌립니다.
