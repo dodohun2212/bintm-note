@@ -225,7 +225,7 @@ prompts/        AI 호출용 프롬프트 7개 (v1)
 samples/        가상 샘플 자료와 대본
 scripts/        기출 비교(compare_exam.py), 샘플로 결과 예시 만들기(make_example.py)
 tests/          자동 테스트와 저장된 AI 결과(fixtures)
-docs/           개발기획안, 완성 프롬프트, 스크린샷
+docs/           개발기획안, 스크린샷
 .github/        자동 테스트 설정(GitHub Actions)
 ```
 
