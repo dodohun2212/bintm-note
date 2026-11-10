@@ -41,3 +41,10 @@ def compute_priorities(scores: ScoresResult, grading: dict[str, Optional[Grading
                                 understanding=understanding(status), priority=pr, action=action_for(pr)))
     rows.sort(key=lambda r: (-r.priority, -r.exam_pct))
     return rows
+
+
+def review_split(rows: list[PriorityRow], asked_ids: set[str]) -> tuple[list[PriorityRow], list[PriorityRow]]:
+    """'복습만' 묶음을 (헷갈린 점을 적은 개념, 나머지)로 나눈다. 앞쪽은 접지 않고 보인다 (v1.11)."""
+    asked = [p for p in rows if p.concept_id in asked_ids]
+    rest = [p for p in rows if p.concept_id not in asked_ids]
+    return asked, rest

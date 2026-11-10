@@ -70,7 +70,7 @@ from core.guard import DailyCounter, ResultCache, session_left
 from core.llm import LLMError, LLMJsonError, LLMKeyError, Usage, fake_mode, has_key
 from core.note import lecture_order, make_note_section, note_detail, professor_quotes, short_section
 from core.pageimg import PAGE_IMG_WIDTH, render_page
-from core.priority import compute_priorities
+from core.priority import compute_priorities, review_split
 from core.schemas import (DETAIL_FULL, DETAIL_MID, DETAIL_SHORT, STATUS_KNOWN, STATUS_NOT_DIAGNOSED, STATUS_UNKNOWN,
                           STATUS_UNSURE, Concept, ConceptsResult, Explanation, Grading, Material, NoteSection,
                           PriorityRow, Question, ScoreRow, Utterance)
@@ -199,7 +199,8 @@ DEFAULTS = dict(
     questions={}, answers={}, dont_know={}, mcq_choice={}, guessed={}, confusion={}, grading={}, priorities=None,
     explanations={}, run_id=None, errors=[], usage=None, from_sample=False, diag_ids=[], q_mode=MODE_MIX, q_mode_used=None,
     material_bytes=None, notes={}, notes_failed=[], quick_diag=False,
-    show_missing=False, grade_failed=[], grade_error=None, explain_failed=[], q_failed=[],
+    show_missing=False, grade_failed=[], grade_error=None, grade_cause=None, explain_failed=[], q_failed=[],
+    notices=[],
 )
 
 
@@ -430,6 +431,8 @@ def give_back_analysis() -> None:
 def run_analysis(material_bytes: bytes, material_name: str, audio_bytes: bytes | None, audio_name: str | None,
                  pasted: str | None, from_sample: bool) -> bool:
     st.session_state.errors = []
+    # 분석 중 안내(E-05·E-10·E-13)는 ②로 넘어가며 화면이 다시 그려져도 남도록 세션에 담아 ② 위에 보인다 (v1.11)
+    notices: list[str] = []
     with st.status("분석을 시작해요…", expanded=True) as status:
         try:
             status.update(label="텍스트 추출 중")
@@ -439,7 +442,7 @@ def run_analysis(material_bytes: bytes, material_name: str, audio_bytes: bytes |
                 show_error("이 PDF는 글자가 그림으로 들어 있어 읽을 수 없어요. 글자가 선택되는 PDF를 올려 주세요. (E-03)")
                 return False
             if material.n_pages >= MAX_PAGES:
-                st.warning(f"앞 {MAX_PAGES}쪽만 분석해요. 한 장씩 올리면 더 정확해요. (E-13)")
+                notices.append(f"앞 {MAX_PAGES}쪽만 분석했어요. 한 장씩 올리면 더 정확해요. (E-13)")
             rid = run_id(material_bytes)
 
             transcript, source = None, None
@@ -449,8 +452,8 @@ def run_analysis(material_bytes: bytes, material_name: str, audio_bytes: bytes |
                 status.update(label="녹음 받아쓰는 중 (몇 분 걸릴 수 있어요)")
                 try:
                     transcript, source = stt.transcribe(audio_bytes, audio_name or "audio.m4a", st.session_state.usage), "audio"
-                except STTError as e:
-                    st.warning(error_message(e))
+                except STTError as e:   # 녹음 없이 자동으로 계속하고 ② 위에 알린다 (v1.11)
+                    notices.append("녹음을 글자로 바꾸지 못해 녹음 없이 계산했어요. 대본 붙여넣기로 다시 분석할 수 있어요. (E-05)")
                     st.session_state.errors.append(str(e))
             if transcript:
                 transcript = mask_pii(transcript)   # 대본도 강의자료처럼 AI에 보내기 전에 가린다 (v1.8)
@@ -489,7 +492,8 @@ def run_analysis(material_bytes: bytes, material_name: str, audio_bytes: bytes |
                             explanations={}, diag_ids=[], q_mode_used=None, notes={}, notes_failed=[],
                             material_bytes=material_bytes if material.kind == "pdf" else None)
     if transcript and not utts:
-        st.info("녹음에서 강조한 말을 찾지 못했어요. 자료만으로 점수를 계산했어요. (E-10)")
+        notices.append("녹음에서 강조한 말을 찾지 못했어요. 자료만으로 점수를 계산했어요. (E-10)")
+    st.session_state.notices = notices
     return True
 
 
@@ -578,6 +582,8 @@ def screen_s02() -> None:
 
     show(tiles([("찾은 개념", len(concepts), "blue"), ("교수님 강조", len(utts), "amber"),
                 ("진단할 개념", len(targets), "red")]))
+    for msg in st.session_state.notices:   # 분석 중에 생긴 안내 (v1.11)
+        st.warning(msg)
     if st.session_state.from_sample:
         st.caption("샘플 자료로 분석한 결과예요.")
     if not st.session_state.transcript:
@@ -807,8 +813,9 @@ def screen_s03() -> None:
         show(tiles([("앎", n[STATUS_KNOWN], "green"), ("헷갈림", n[STATUS_UNSURE], "amber"),
                     ("모름", n[STATUS_UNKNOWN], "red")]))
     elif failed:
-        st.error(f"서술형 {len(failed)}문제를 채점하지 못했어요. 아래 빨간 표시가 있는 문제를 확인하고 "
-                 "'채점 못한 문제 다시 채점'을 눌러 주세요. (E-08)")
+        cause = st.session_state.grade_cause or "AI 답을 읽지 못했어요. 다시 시도해 주세요. (E-08)"
+        st.error(f"서술형 {len(failed)}문제를 채점하지 못했어요. {cause} 아래 빨간 표시가 있는 문제를 확인하고 "
+                 "'채점 못한 문제 다시 채점'을 눌러 주세요.")
         if st.session_state.grade_error:
             with st.expander("자세한 오류"):
                 st.code(st.session_state.grade_error)
@@ -919,6 +926,7 @@ def _grade_all(ids: list[str]) -> None:
             st.session_state.grading[cid] = out
     st.session_state.grade_failed = [cid for cid, _ in failed]
     st.session_state.grade_error = (f"{type(failed[0][1]).__name__}: {failed[0][1]}"[:800] if failed else None)
+    st.session_state.grade_cause = error_message(failed[0][1]) if failed else None   # 원인별 문구·코드 (v1.11)
     st.session_state.priorities = compute_priorities(st.session_state.scores, st.session_state.grading)
     st.session_state.update(explanations={}, notes={}, notes_failed=[], explain_failed=[])
     st.rerun()
@@ -1174,11 +1182,18 @@ def screen_s04() -> None:
                 continue
             show(f'<div class="bt-tier">{h(tier)} · {len(rows)}개<small>{h(note)}</small></div>')
             if tier == "복습만":
-                with st.expander(f"복습만 {len(rows)}개 펼치기"):
-                    st.caption(f"'진단 안 함'은 문제를 내지 않은 개념이에요(출제 가능성 점수 {DIAG_MIN_PCT}점 미만이거나 "
-                               "빠른 진단에서 뺀 개념). 이해도 0.5로 계산해요.")
-                    for p in rows:
+                # 헷갈린 점을 적은 개념은 '복습만'이어도 접지 않는다. 적은 질문에 대한 답이 숨지 않게 (v1.11)
+                asked, rest = review_split(rows, {cid for cid in st.session_state.questions if _confusion(cid)})
+                if asked:
+                    st.caption("헷갈린 점을 적은 개념은 펼쳐 두었어요.")
+                    for p in asked:
                         _concept_block(rank[p.concept_id], p)
+                if rest:
+                    with st.expander(f"복습만 {len(rest)}개 펼치기"):
+                        st.caption(f"'진단 안 함'은 문제를 내지 않은 개념이에요(출제 가능성 점수 {DIAG_MIN_PCT}점 미만이거나 "
+                                   "빠른 진단에서 뺀 개념). 이해도 0.5로 계산해요.")
+                        for p in rest:
+                            _concept_block(rank[p.concept_id], p)
             else:
                 missing = [p.concept_id for p in rows if p.concept_id not in st.session_state.explanations]
                 if tier == "다음" and len(missing) > 1:
