@@ -413,9 +413,30 @@ def run(out_dir: Path, today: Optional[date] = None) -> dict:
         failed=failed, times={k: round(v, 1) for k, v in times.items()}, total=round(time.perf_counter() - t0, 1),
         calls=usage["calls"], input_tokens=usage["input_tokens"], output_tokens=usage["output_tokens"],
         top3=[f"{s.name} {s.pct}점" for s in scores.scores[:3]],
+        env=_env_text(),
     )
     (out_dir / "README.md").write_text(index_markdown(stats), encoding="utf-8")
     return stats
+
+
+def _env_text() -> str:
+    """만든 환경: Python과 주요 패키지 버전 (requirements.txt 고정값과 다르면 함께 적는다)."""
+    import platform
+    from importlib.metadata import PackageNotFoundError, version
+    pinned = {}
+    for ln in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines():
+        if "==" in ln:
+            name, ver = ln.split("==", 1)
+            pinned[name.strip().lower()] = ver.strip()
+    parts = [f"Python {platform.python_version()}"]
+    for name in ("anthropic", "pymupdf", "pydantic"):
+        try:
+            v = version(name)
+        except PackageNotFoundError:
+            continue
+        fixed = pinned.get(name)
+        parts.append(f"{name} {v}" + (f"(고정값 {fixed})" if fixed and fixed != v else ""))
+    return " · ".join(parts)
 
 
 def index_markdown(s: dict) -> str:
@@ -439,6 +460,7 @@ def index_markdown(s: dict) -> str:
         "## 만든 조건과 잰 값",
         "",
         f"- 만든 날: {s['date']} · AI: {how}",
+        f"- 실행 환경: {s.get('env', '')}",
         "- 자료: `samples/`의 가상 강의자료(자료구조 8장 트리와 힙, 20쪽)와 녹음 대본",
         f"- 출제 점수 상위 3개: {' · '.join(s['top3'])}",
         f"- 개념 {s['concepts']}개, 교수님 강조 {s['utterances']}개, "
