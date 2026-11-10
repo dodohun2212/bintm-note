@@ -1,4 +1,4 @@
-# T-42 ~ T-48 (v1.8~v1.9): 대본도 가리기, 형식이 틀린 AI 항목은 그것만 버리기, '내가 놓친 점' 바로잡기,
+# T-42 ~ T-50 (v1.8~v1.10): 대본도 가리기, 형식이 틀린 AI 항목은 그것만 버리기, '내가 놓친 점' 바로잡기,
 # 문제 그림 때문에 교재에 오류가 있다고 단정하지 않기, 기다리는 안내가 어디서든 보이기, 서술형 크기 줄이기
 from pathlib import Path
 
@@ -152,3 +152,15 @@ def test_t48_prompt_change_reloads_prompts_and_sample_questions():
     assert changed({"core.diagnose": 1.0}, {"core.diagnose": 1.0, "prompts/03A.md": 2.0})  # 프롬프트 기록이 없던 첫 배포
     app_src = (ROOT / "app.py").read_text(encoding="utf-8")
     assert "now.update(_prompt_mtimes())" in app_src and "sys._bintm_mtimes.update(_prompt_mtimes())" in app_src
+
+
+# ----------------------------------------------------------------- T-50 README 안내·정확한 문구, 채점 말투 (v1.10)
+
+
+def test_t50_readme_wake_note_and_exact_wording():
+    """앱이 잠들었을 때 안내, '같은 입력 → 같은 점수'를 'AI가 찾은 신호가 같으면'으로, 채점 이유는 '~다' 말투."""
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "Yes, get this app back up!" in readme and "같은 입력이면 항상 같은 점수" not in readme
+    assert "AI가 찾은 신호" in readme and "scripts/" in readme
+    p = prompts.load("03B")
+    assert '문장 끝은 "~다"로' in p and "맞음." not in p
